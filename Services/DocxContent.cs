@@ -409,6 +409,9 @@ public class DocxContent : IDocxContent
         // This ensures SEQ fields for figures and tables are updated correctly
         EnableUpdateFieldsOnOpen(document);
 
+        // Mark TOC fields as dirty to force Word to regenerate the Table of Contents
+        MarkTocFieldsAsDirty(document);
+
         // Calculate ID offset based on existing numbering definitions
         int idOffset = 0;
         if (_listDefinitions.Count > 0)
@@ -492,6 +495,57 @@ public class DocxContent : IDocxContent
         settings.Save();
 
         Console.WriteLine("[NOTE] You will get a message to update the fields when opening the document. Please accept this to ensure figure and table numbers are correct.");
+    }
+
+    /// <summary>
+    /// Marks all TOC (Table of Contents) fields in the document as dirty,
+    /// forcing Word to regenerate them when the document is opened.
+    /// This is necessary because UpdateFieldsOnOpen alone may not reliably update TOC fields,
+    /// even though it works fine for Table of Figures and Table of Tables.
+    /// </summary>
+    private static void MarkTocFieldsAsDirty(WordprocessingDocument document)
+    {
+        var body = document.MainDocumentPart?.Document?.Body;
+        if (body == null) return;
+
+        // Handle complex fields (fldChar + instrText pattern)
+        // Track the most recent Begin FieldChar so we can mark it dirty when we find a TOC instruction
+        var fieldCharBeginStack = new Stack<FieldChar>();
+
+        foreach (var run in body.Descendants<Run>())
+        {
+            var fieldChar = run.GetFirstChild<FieldChar>();
+            if (fieldChar != null)
+            {
+                if (fieldChar.FieldCharType?.Value == FieldCharValues.Begin)
+                {
+                    fieldCharBeginStack.Push(fieldChar);
+                }
+                else if (fieldChar.FieldCharType?.Value == FieldCharValues.End && fieldCharBeginStack.Count > 0)
+                {
+                    fieldCharBeginStack.Pop();
+                }
+            }
+
+            var fieldCode = run.GetFirstChild<FieldCode>();
+            if (fieldCode != null && fieldCode.Text?.TrimStart().StartsWith("TOC") == true)
+            {
+                // Mark the associated Begin FieldChar as dirty
+                if (fieldCharBeginStack.Count > 0)
+                {
+                    fieldCharBeginStack.Peek().Dirty = true;
+                }
+            }
+        }
+
+        // Handle simple fields (<w:fldSimple>)
+        foreach (var simpleField in body.Descendants<SimpleField>())
+        {
+            if (simpleField.Instruction?.Value?.TrimStart().StartsWith("TOC") == true)
+            {
+                simpleField.Dirty = true;
+            }
+        }
     }
 
     /// <summary>
