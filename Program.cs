@@ -1,0 +1,456 @@
+﻿using System.Text.RegularExpressions;
+using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
+using Markdig;
+using Markdig.Syntax;
+using md_to_docx_sync.Enums;
+using md_to_docx_sync.Services;
+
+// Get command line arguments
+
+string? inputMDFilePath = args.ElementAtOrDefault(0);
+if (string.IsNullOrEmpty(inputMDFilePath))
+{
+    Console.Error.WriteLine("[ERROR] Please provide the input MD file path as the first argument.");
+    return;
+}
+
+string? inputDOCXTemplateFilePath = args.ElementAtOrDefault(1);
+if (string.IsNullOrEmpty(inputDOCXTemplateFilePath))
+{
+    Console.Error.WriteLine("[ERROR] Please provide the input DOCX template file path as the second argument.");
+    return;
+}
+
+string? outputDOCXFilePath = args.ElementAtOrDefault(2);
+if (string.IsNullOrEmpty(outputDOCXFilePath))
+{
+    Console.Error.WriteLine("[ERROR] Please provide the output DOCX file path as the third argument.");
+    return;
+}
+
+// Get the directory containing the markdown file for resolving relative paths
+string? inputMDFileDir = Path.GetDirectoryName(Path.GetFullPath(inputMDFilePath));
+
+// Read and parse Markdown File
+var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseSmartyPants().Build();
+var markdownContent = Markdown.Parse(File.ReadAllText(inputMDFilePath), pipeline);
+
+// Create DocxContent from markdown
+DocxContent docxContent = new();
+
+// Helper to parse caption with optional width (e.g., "Caption text |> 400")
+(string caption, int? width) ParseCaptionWithWidth(string? rawCaption)
+{
+    if (string.IsNullOrEmpty(rawCaption))
+        return (string.Empty, null);
+
+    var match = Regex.Match(rawCaption, @"^(.+?)\s*\|>\s*(\d+)\s*$");
+    if (match.Success)
+    {
+        return (match.Groups[1].Value.Trim(), int.Parse(match.Groups[2].Value));
+    }
+    return (rawCaption.Trim(), null);
+}
+
+// Helper to get plain text from inline elements (for captions)
+string GetPlainText(Markdig.Syntax.Inlines.ContainerInline? container)
+{
+    if (container == null) return string.Empty;
+    var sb = new System.Text.StringBuilder();
+    foreach (var inline in container)
+    {
+        if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
+            sb.Append(literal.Content);
+        else if (inline is Markdig.Syntax.Inlines.ContainerInline nested)
+            sb.Append(GetPlainText(nested));
+    }
+    return sb.ToString();
+}
+
+// Process inline content with formatting
+void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false)
+{
+    if (container == null) return;
+
+    foreach (var inline in container)
+    {
+        if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
+        {
+            docxContent.AddText(literal.Content.ToString(), isBold, isItalic, isUnderline, isStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.EmphasisInline emphasis)
+        {
+            bool newBold = isBold;
+            bool newItalic = isItalic;
+            bool newStrikethrough = isStrikethrough;
+
+            if (emphasis.DelimiterChar == '~' && emphasis.DelimiterCount == 2)
+                newStrikethrough = true;
+            else if (emphasis.DelimiterCount == 2)
+                newBold = true;
+            else
+                newItalic = true;
+
+            ProcessInlines(emphasis, newBold, newItalic, isUnderline, newStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.CodeInline codeInline)
+        {
+            docxContent.AddText(codeInline.Content, isBold, isItalic, isUnderline, isStrikethrough, isLiteral: true);
+        }
+        else if (inline is Markdig.Extensions.SmartyPants.SmartyPant smartyPant)
+        {
+            string smartText = smartyPant.Type switch
+            {
+                Markdig.Extensions.SmartyPants.SmartyPantType.Quote => "\u2018",
+                Markdig.Extensions.SmartyPants.SmartyPantType.LeftQuote => "\u2018",      // '
+                Markdig.Extensions.SmartyPants.SmartyPantType.RightQuote => "\u2019",     // '
+                Markdig.Extensions.SmartyPants.SmartyPantType.DoubleQuote => "\u201C",
+                Markdig.Extensions.SmartyPants.SmartyPantType.LeftDoubleQuote => "\u201C", // "
+                Markdig.Extensions.SmartyPants.SmartyPantType.RightDoubleQuote => "\u201D", // "
+                Markdig.Extensions.SmartyPants.SmartyPantType.Ellipsis => "\u2026",       // …
+                Markdig.Extensions.SmartyPants.SmartyPantType.Dash2 => "\u2013",          // –
+                Markdig.Extensions.SmartyPants.SmartyPantType.Dash3 => "\u2014",          // —
+                _ => smartyPant.ToString()
+            };
+            docxContent.AddText(smartText, isBold, isItalic, isUnderline, isStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.HtmlInline htmlInline)
+        {
+            // Handle <u> and </u> tags for underline
+            string tag = htmlInline.Tag.ToLowerInvariant();
+            if (tag == "<u>")
+            {
+                // Find content until </u> - this is handled by the next iterations
+                // We need to track underline state
+            }
+            // We'll handle underline by detecting <u> start/end in a different way
+        }
+        else if (inline is Markdig.Syntax.Inlines.LineBreakInline)
+        {
+            docxContent.AddLineBreak();
+        }
+        else if (inline is Markdig.Syntax.Inlines.ContainerInline nestedContainer)
+        {
+            ProcessInlines(nestedContainer, isBold, isItalic, isUnderline, isStrikethrough);
+        }
+    }
+}
+
+// Process inline content with HTML underline tag detection
+void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isStrikethrough = false)
+{
+    if (container == null) return;
+
+    bool currentUnderline = false;
+    var inlines = container.ToList();
+
+    for (int i = 0; i < inlines.Count; i++)
+    {
+        var inline = inlines[i];
+
+        if (inline is Markdig.Syntax.Inlines.HtmlInline htmlInline)
+        {
+            string tag = htmlInline.Tag.ToLowerInvariant();
+            if (tag == "<u>")
+                currentUnderline = true;
+            else if (tag == "</u>")
+                currentUnderline = false;
+        }
+        else if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
+        {
+            docxContent.AddText(literal.Content.ToString(), isBold, isItalic, currentUnderline, isStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.EmphasisInline emphasis)
+        {
+            bool newBold = isBold;
+            bool newItalic = isItalic;
+            bool newStrikethrough = isStrikethrough;
+
+            if (emphasis.DelimiterChar == '~' && emphasis.DelimiterCount == 2)
+                newStrikethrough = true;
+            else if (emphasis.DelimiterCount == 2)
+                newBold = true;
+            else
+                newItalic = true;
+
+            ProcessInlines(emphasis, newBold, newItalic, currentUnderline, newStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.CodeInline codeInline)
+        {
+            docxContent.AddText(codeInline.Content, isBold, isItalic, currentUnderline, isStrikethrough, isLiteral: true);
+        }
+        else if (inline is Markdig.Extensions.SmartyPants.SmartyPant smartyPant)
+        {
+            string smartText = smartyPant.Type switch
+            {
+                Markdig.Extensions.SmartyPants.SmartyPantType.Quote => "'",
+                Markdig.Extensions.SmartyPants.SmartyPantType.LeftQuote => "\u2018",      // '
+                Markdig.Extensions.SmartyPants.SmartyPantType.RightQuote => "\u2019",     // '
+                Markdig.Extensions.SmartyPants.SmartyPantType.DoubleQuote => "\"",
+                Markdig.Extensions.SmartyPants.SmartyPantType.LeftDoubleQuote => "\u201C", // "
+                Markdig.Extensions.SmartyPants.SmartyPantType.RightDoubleQuote => "\u201D", // "
+                Markdig.Extensions.SmartyPants.SmartyPantType.Ellipsis => "\u2026",       // …
+                Markdig.Extensions.SmartyPants.SmartyPantType.Dash2 => "\u2013",          // –
+                Markdig.Extensions.SmartyPants.SmartyPantType.Dash3 => "\u2014",          // —
+                _ => smartyPant.ToString()
+            };
+            docxContent.AddText(smartText, isBold, isItalic, currentUnderline, isStrikethrough);
+        }
+        else if (inline is Markdig.Syntax.Inlines.LineBreakInline)
+        {
+            docxContent.AddLineBreak();
+        }
+        else if (inline is Markdig.Syntax.Inlines.ContainerInline nestedContainer)
+        {
+            ProcessInlines(nestedContainer, isBold, isItalic, currentUnderline, isStrikethrough);
+        }
+    }
+}
+
+// Process list items recursively with nesting level tracking
+void ProcessListBlock(ListBlock listBlock, int nestingLevel = 0)
+{
+    bool isOrdered = listBlock.IsOrdered;
+    DocxListType listType = isOrdered ? DocxListType.Numbered : DocxListType.Bulleted;
+
+    // Only create a new list at the top level
+    if (nestingLevel == 0)
+    {
+        docxContent.NewList(listType);
+    }
+
+    foreach (var item in listBlock)
+    {
+        if (item is ListItemBlock listItemBlock)
+        {
+            foreach (var child in listItemBlock)
+            {
+                if (child is ParagraphBlock paragraphBlock)
+                {
+                    docxContent.NewListItem(level: nestingLevel);
+                    ProcessInlinesWithUnderline(paragraphBlock.Inline);
+                }
+                else if (child is ListBlock nestedList)
+                {
+                    // Process nested list with increased nesting level
+                    ProcessListBlock(nestedList, nestingLevel + 1);
+                }
+            }
+        }
+    }
+}
+
+// Main recursive processor for markdown nodes
+void ProcessMarkdownNode(MarkdownObject node)
+{
+    switch (node)
+    {
+        case HeadingBlock headingBlock:
+            docxContent.NewHeading(headingBlock.Level);
+            ProcessInlinesWithUnderline(headingBlock.Inline);
+            break;
+
+        case ParagraphBlock paragraphBlock:
+            // Check if this paragraph contains only an image link
+            var firstInline = paragraphBlock.Inline?.FirstChild;
+            if (firstInline is Markdig.Syntax.Inlines.LinkInline { IsImage: true } imageLink &&
+                paragraphBlock.Inline?.LastChild == firstInline)
+            {
+                // This is a standalone image paragraph - it will be handled by the Figure container
+                // Skip processing here as it's handled by the Figure case
+                break;
+            }
+
+            docxContent.NewParagraph();
+            ProcessInlinesWithUnderline(paragraphBlock.Inline);
+            break;
+
+        case ListBlock listBlock:
+            ProcessListBlock(listBlock);
+            break;
+
+        case FencedCodeBlock fencedCodeBlock:
+            var codeContent = string.Join("\n", fencedCodeBlock.Lines);
+            docxContent.NewParagraph(isLiteral: true);
+            docxContent.AddText(codeContent);
+            break;
+
+        case ThematicBreakBlock:
+            // Horizontal rule - skip or could add a separator
+            break;
+
+        case Markdig.Extensions.Figures.Figure figure:
+            // Figure can contain Table, ParagraphBlock (with image), and FigureCaption
+            string? figureCaption = null;
+            int? figureWidth = null;
+
+            // First, find the caption to get width info
+            foreach (var child in figure)
+            {
+                if (child is Markdig.Extensions.Figures.FigureCaption caption)
+                {
+                    // FigureCaption is a LeafBlock with Inline content
+                    var rawCaption = GetPlainText(caption.Inline);
+                    (figureCaption, figureWidth) = ParseCaptionWithWidth(rawCaption);
+                }
+            }
+
+            // Now process the figure contents
+            bool hasTable = false;
+            bool hasImage = false;
+
+            foreach (var child in figure)
+            {
+                if (child is Markdig.Extensions.Tables.Table table)
+                {
+                    hasTable = true;
+                    docxContent.NewTable(figureCaption, figureWidth);
+                    foreach (var row in table)
+                    {
+                        if (row is Markdig.Extensions.Tables.TableRow tableRow)
+                        {
+                            docxContent.NewRow();
+                            foreach (var cell in tableRow)
+                            {
+                                if (cell is Markdig.Extensions.Tables.TableCell tableCell)
+                                {
+                                    docxContent.NewCell();
+                                    foreach (var cellContent in tableCell)
+                                    {
+                                        if (cellContent is ParagraphBlock cellParagraph)
+                                        {
+                                            ProcessInlinesWithUnderline(cellParagraph.Inline);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                else if (child is ParagraphBlock figParagraphBlock)
+                {
+                    // Check for image inside paragraph
+                    foreach (var inline in figParagraphBlock.Inline ?? Enumerable.Empty<Markdig.Syntax.Inlines.Inline>())
+                    {
+                        if (inline is Markdig.Syntax.Inlines.LinkInline { IsImage: true } figImageLink)
+                        {
+                            hasImage = true;
+                            string? imagePath = figImageLink.Url;
+                            if (!string.IsNullOrEmpty(imagePath) && !string.IsNullOrEmpty(inputMDFileDir))
+                            {
+                                // Resolve relative path
+                                imagePath = Path.Combine(inputMDFileDir, imagePath);
+                            }
+
+                            // Convert width from pixels to inches (assuming 96 DPI)
+                            double? widthInches = figureWidth.HasValue ? figureWidth.Value / 96.0 : null;
+                            docxContent.AddImage(imagePath ?? string.Empty, figureCaption, widthInches);
+                        }
+                    }
+                }
+                // FigureCaption already processed above
+            }
+
+            // Check for missing caption and print warning
+            if (string.IsNullOrWhiteSpace(figureCaption))
+            {
+                if (hasTable)
+                {
+                    Console.WriteLine("[WARNING] Table is missing a caption.");
+                }
+                else if (hasImage)
+                {
+                    Console.WriteLine("[WARNING] Image is missing a caption.");
+                }
+            }
+            break;
+
+        case Markdig.Extensions.Tables.Table table:
+            // Standalone table (not in a figure)
+            docxContent.NewTable();
+            foreach (var row in table)
+            {
+                if (row is Markdig.Extensions.Tables.TableRow tableRow)
+                {
+                    docxContent.NewRow();
+                    foreach (var cell in tableRow)
+                    {
+                        if (cell is Markdig.Extensions.Tables.TableCell tableCell)
+                        {
+                            docxContent.NewCell();
+                            foreach (var cellContent in tableCell)
+                            {
+                                if (cellContent is ParagraphBlock cellParagraph)
+                                {
+                                    ProcessInlinesWithUnderline(cellParagraph.Inline);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+
+        case LinkReferenceDefinitionGroup:
+            // Skip link reference definitions
+            break;
+
+        case MarkdownDocument document:
+            foreach (var child in document)
+            {
+                ProcessMarkdownNode(child);
+            }
+            break;
+
+        case ContainerBlock containerBlock:
+            foreach (var child in containerBlock)
+            {
+                ProcessMarkdownNode(child);
+            }
+            break;
+    }
+}
+
+ProcessMarkdownNode(markdownContent);
+
+// Copy DOCX Template to Output File
+
+System.IO.File.Copy(inputDOCXTemplateFilePath, outputDOCXFilePath, true);
+
+// Write to DOCX File
+
+var doc = WordprocessingDocument.Open(outputDOCXFilePath, true);
+if (doc.MainDocumentPart is null)
+{
+    Console.Error.WriteLine("[ERROR] The DOCX template does not contain a valid main document part.");
+    return;
+}
+if (doc.MainDocumentPart.Document is null)
+{
+    Console.Error.WriteLine("[ERROR] The DOCX template does not contain a valid document.");
+    return;
+}
+
+var body = doc.MainDocumentPart.Document.Body;
+if (body is null)
+{
+    Console.Error.WriteLine("[ERROR] The DOCX template does not contain a valid body.");
+    return;
+}
+
+var firstSectionEndPara = body
+            .Descendants<Paragraph>()
+            .FirstOrDefault(p => p.Descendants<SectionProperties>().Any());
+if (firstSectionEndPara is null)
+{
+    Console.Error.WriteLine("[ERROR] The DOCX template does not contain a second section break.");
+    return;
+}
+
+// var newPara = new Paragraph(new Run(new Text("Hello, World!")));
+// body.InsertAfter(newPara, firstSectionEndPara);
+
+docxContent.WriteTo(doc, firstSectionEndPara);
+
+doc.Save();
