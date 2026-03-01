@@ -4,7 +4,10 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using Markdig;
 using Markdig.Syntax;
 using md_to_docx_sync.Enums;
+using md_to_docx_sync.Models;
 using md_to_docx_sync.Services;
+using YamlDotNet.Serialization;
+using YamlDotNet.Serialization.NamingConventions;
 
 // Get command line arguments
 
@@ -34,7 +37,21 @@ string? inputMDFileDir = Path.GetDirectoryName(Path.GetFullPath(inputMDFilePath)
 
 // Read and parse Markdown File
 var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseSmartyPants().Build();
-var markdownContent = Markdown.Parse(File.ReadAllText(inputMDFilePath), pipeline);
+
+// Pre-process: replace [@key] / [@key1; @key2] with «key» / «key1;key2» placeholders
+// so Markdig's link parser doesn't consume the brackets and break citation detection.
+var rawMarkdown = File.ReadAllText(inputMDFilePath);
+var citationPreProcess = new Regex(@"\[@([a-zA-Z0-9_:-]+(?:\s*;\s*@[a-zA-Z0-9_:-]+)*)\]");
+rawMarkdown = citationPreProcess.Replace(rawMarkdown, match =>
+{
+    // Strip the leading @ from each key and join with ;
+    var keys = match.Groups[1].Value
+        .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries)
+        .Select(k => k.TrimStart('@'));
+    return $"\u00AB{string.Join(";", keys)}\u00BB";
+});
+
+var markdownContent = Markdown.Parse(rawMarkdown, pipeline);
 
 // Create DocxContent from markdown
 DocxContent docxContent = new();
@@ -68,6 +85,76 @@ string GetPlainText(Markdig.Syntax.Inlines.ContainerInline? container)
     return sb.ToString();
 }
 
+// Helper to parse references YAML block into ReferenceSource list
+List<ReferenceSource> ParseReferencesYaml(string yamlContent)
+{
+    var deserializer = new DeserializerBuilder()
+        .WithNamingConvention(CamelCaseNamingConvention.Instance)
+        .Build();
+
+    var yamlData = deserializer.Deserialize<List<Dictionary<string, object>>>(yamlContent);
+    if (yamlData == null) return new List<ReferenceSource>();
+
+    var references = new List<ReferenceSource>();
+    foreach (var entry in yamlData)
+    {
+        if (!entry.TryGetValue("key", out var keyObj) || !entry.TryGetValue("type", out var typeObj))
+        {
+            Console.WriteLine("[WARNING] Reference entry missing 'key' or 'type' field, skipping.");
+            continue;
+        }
+
+        var reference = new ReferenceSource
+        {
+            Key = keyObj.ToString()!,
+            Type = typeObj.ToString()!
+        };
+
+        foreach (var (fieldName, fieldValue) in entry)
+        {
+            if (fieldName == "key" || fieldName == "type") continue;
+            reference.Fields[fieldName] = fieldValue?.ToString() ?? string.Empty;
+        }
+
+        references.Add(reference);
+    }
+
+    return references;
+}
+
+// Regex for detecting «key1;key2» citation placeholders (produced by pre-processing step)
+var citationPattern = new Regex(@"\u00AB([a-zA-Z0-9_;:-]+)\u00BB");
+
+// Helper to process literal text that may contain citation placeholders «key1;key2»
+void AddTextWithCitations(string text, bool isBold, bool isItalic, bool isUnderline, bool isStrikethrough, bool isLiteral)
+{
+    int lastIndex = 0;
+    foreach (Match match in citationPattern.Matches(text))
+    {
+        // Add text before the citation, stripping any trailing space
+        // (Word's citation field rendering already provides the necessary spacing)
+        if (match.Index > lastIndex)
+        {
+            var beforeText = text.Substring(lastIndex, match.Index - lastIndex).TrimEnd(' ');
+            if (beforeText.Length > 0)
+                docxContent.AddText(beforeText, isBold, isItalic, isUnderline, isStrikethrough, isLiteral);
+        }
+
+        // Parse citation keys from placeholder (keys are ;-separated)
+        var citationKeys = match.Groups[1].Value
+            .Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        docxContent.AddCitation(citationKeys);
+
+        lastIndex = match.Index + match.Length;
+    }
+
+    // Add remaining text after last citation
+    if (lastIndex < text.Length)
+    {
+        docxContent.AddText(text.Substring(lastIndex), isBold, isItalic, isUnderline, isStrikethrough, isLiteral);
+    }
+}
+
 // Process inline content with formatting
 void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false)
 {
@@ -77,7 +164,7 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
     {
         if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
         {
-            docxContent.AddText(literal.Content.ToString(), isBold, isItalic, isUnderline, isStrikethrough);
+            AddTextWithCitations(literal.Content.ToString(), isBold, isItalic, isUnderline, isStrikethrough, false);
         }
         else if (inline is Markdig.Syntax.Inlines.EmphasisInline emphasis)
         {
@@ -159,7 +246,7 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
         }
         else if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
         {
-            docxContent.AddText(literal.Content.ToString(), isBold, isItalic, currentUnderline, isStrikethrough);
+            AddTextWithCitations(literal.Content.ToString(), isBold, isItalic, currentUnderline, isStrikethrough, false);
         }
         else if (inline is Markdig.Syntax.Inlines.EmphasisInline emphasis)
         {
@@ -271,6 +358,32 @@ void ProcessMarkdownNode(MarkdownObject node)
             break;
 
         case FencedCodeBlock fencedCodeBlock:
+            // Check if this is a references block
+            if (fencedCodeBlock.Info?.Trim() == "references")
+            {
+                var yamlContent = string.Join("\n", fencedCodeBlock.Lines);
+                try
+                {
+                    var references = ParseReferencesYaml(yamlContent);
+                    if (references.Count > 0)
+                    {
+                        // Remove the heading that preceded this references block
+                        docxContent.RemoveLastHeading();
+                        docxContent.AddBibliography(references);
+                        Console.WriteLine($"[INFO] Parsed {references.Count} bibliography source(s).");
+                    }
+                    else
+                    {
+                        Console.WriteLine("[WARNING] References block found but contained no valid entries.");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.Error.WriteLine($"[ERROR] Failed to parse references YAML: {ex.Message}");
+                }
+                break;
+            }
+
             var codeContent = string.Join("\n", fencedCodeBlock.Lines);
             docxContent.NewParagraph(isLiteral: true);
             docxContent.AddText(codeContent);

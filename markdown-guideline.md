@@ -121,6 +121,315 @@ These conversions are automatic and cannot be disabled per-instance. If you need
 
 ---
 
+## References and Bibliography
+
+The converter supports Word-compatible bibliography references using a fenced `references` code block for source definitions and `[@key]` for inline citations. When the document is opened in Word, CITATION and BIBLIOGRAPHY fields are rendered using Word's built-in bibliography engine.
+
+### Defining sources
+
+Sources are defined in a fenced code block with `references` as the language identifier. The content is YAML -- a list of entries, each with a `key`, `type`, and type-specific fields.
+
+````markdown
+```references
+- key: smith2006
+  type: Book
+  author: Smith, John D; Doe, Jane
+  title: How to Write Bibliographies
+  year: 2006
+  city: Chicago
+  publisher: Adventure Works Press
+  edition: 2nd
+
+- key: chen2020
+  type: JournalArticle
+  author: Chen, Jacky
+  title: Modern Citation Systems
+  journalName: Adventure Works Monthly
+  year: 2020
+  pages: 50-62
+  volume: III
+  issue: 12
+```
+````
+
+The `references` block does not produce visible output in the DOCX body. The sources are stored in the document's bibliography data (CustomXmlPart), and the template's existing bibliography/references section renders them. Inline `[@key]` citations are replaced with Word CITATION fields that link to these sources.
+
+### Inline citations
+
+Use `[@key]` to cite a source inline. Multiple citations can be combined with semicolons.
+
+```markdown
+This was demonstrated in prior work [@smith2006].
+Several studies support this [@smith2006; @chen2020].
+```
+
+### Source types
+
+The `type` field maps to Word's built-in bibliography source types. The following types are supported:
+
+| Type value | Word source type |
+| ---------- | ---------------- |
+| `Book` | Book |
+| `BookSection` | Book Section |
+| `JournalArticle` | Journal Article |
+| `ArticleInAPeriodical` | Article in a Periodical |
+| `ConferenceProceedings` | Conference Proceedings |
+| `Report` | Report |
+| `WebSite` | Web site |
+| `DocumentFromWebSite` | Document From Web site |
+| `ElectronicSource` | Electronic Source |
+| `Art` | Art |
+| `SoundRecording` | Sound Recording |
+| `Performance` | Performance |
+| `Film` | Film |
+| `Interview` | Interview |
+| `Patent` | Patent |
+| `Case` | Case |
+| `Misc` | Miscellaneous |
+
+Unrecognized type values default to `Misc`.
+
+### Fields per source type
+
+Each source type supports a different set of fields. All fields are optional except `key` and `type`. Person fields (author, editor, etc.) use the format `Last, First` with multiple people separated by semicolons.
+
+#### Book
+
+```yaml
+- key: example
+  type: Book
+  author: Last, First; Last2, First2
+  title: Book Title
+  year: 2006
+  city: Chicago
+  publisher: Publisher Name
+  edition: 2nd
+```
+
+#### Book Section
+
+```yaml
+- key: example
+  type: BookSection
+  author: Last, First
+  title: Chapter Title
+  bookTitle: Book Title
+  year: 2006
+  pages: 50-62
+  city: Chicago
+  publisher: Publisher Name
+  editor: Last, First
+```
+
+#### Journal Article
+
+```yaml
+- key: example
+  type: JournalArticle
+  author: Last, First
+  title: Article Title
+  journalName: Journal Name
+  year: 2006
+  pages: 50-62
+  volume: III
+  issue: 12
+```
+
+#### Article in a Periodical
+
+```yaml
+- key: example
+  type: ArticleInAPeriodical
+  author: Last, First
+  title: Article Title
+  periodicalTitle: Periodical Name
+  year: 2006
+  month: January
+  day: 1
+  pages: 50-62
+```
+
+#### Conference Proceedings
+
+```yaml
+- key: example
+  type: ConferenceProceedings
+  author: Last, First
+  title: Paper Title
+  year: 2006
+  city: Chicago
+  publisher: Publisher Name
+```
+
+#### Report
+
+```yaml
+- key: example
+  type: Report
+  author: Last, First
+  title: Report Title
+  year: 2006
+  publisher: Publisher Name
+  city: Chicago
+```
+
+#### Web site
+
+```yaml
+- key: example
+  type: WebSite
+  author: Last, First
+  nameOfWebPage: Page Title
+  yearAccessed: 2024
+  monthAccessed: January
+  dayAccessed: 15
+  url: https://www.example.com
+```
+
+#### Document From Web site
+
+```yaml
+- key: example
+  type: DocumentFromWebSite
+  author: Last, First
+  nameOfWebPage: Page Title
+  year: 2006
+  month: January
+  day: 1
+  yearAccessed: 2024
+  monthAccessed: January
+  dayAccessed: 15
+  url: https://www.example.com
+```
+
+#### Electronic Source
+
+```yaml
+- key: example
+  type: ElectronicSource
+  author: Last, First
+  title: Source Title
+  city: Chicago
+  publisher: Publisher Name
+  year: 2006
+```
+
+#### Art
+
+```yaml
+- key: example
+  type: Art
+  artist: Last, First
+  title: Artwork Title
+  institution: Gallery Name
+  year: 2006
+```
+
+#### Sound Recording
+
+```yaml
+- key: example
+  type: SoundRecording
+  composer: Last, First
+  title: Recording Title
+  productionCompany: Company Name
+  year: 2006
+```
+
+#### Performance
+
+```yaml
+- key: example
+  type: Performance
+  writer: Last, First
+  title: Performance Title
+  productionCompany: Company Name
+  city: Chicago
+  year: 2006
+```
+
+#### Film
+
+```yaml
+- key: example
+  type: Film
+  director: Last, First
+  title: Film Title
+  productionCompany: Company Name
+  countryRegion: United States of America
+  year: 2006
+```
+
+#### Interview
+
+```yaml
+- key: example
+  type: Interview
+  interviewee: Last, First
+  title: Interview Title
+  year: 2006
+  month: January
+  day: 1
+```
+
+#### Patent
+
+```yaml
+- key: example
+  type: Patent
+  inventor: Last, First
+  title: Patent Title
+  year: 2006
+  countryRegion: United States of America
+  patentNumber: 123 456
+```
+
+#### Case
+
+```yaml
+- key: example
+  type: Case
+  title: Case Title
+  reporter: Supreme Court Reporter
+  year: 2006
+```
+
+#### Miscellaneous
+
+```yaml
+- key: example
+  type: Misc
+  author: Last, First
+  title: Title
+  year: 2006
+  city: Chicago
+  publisher: Publisher Name
+```
+
+### Person field names by role
+
+Different source types use different person roles. Use the appropriate field name:
+
+| Field name | Used by |
+| ---------- | ------- |
+| `author` | Book, BookSection, JournalArticle, ArticleInAPeriodical, ConferenceProceedings, Report, WebSite, DocumentFromWebSite, ElectronicSource, Misc |
+| `editor` | BookSection |
+| `artist` | Art |
+| `composer` | SoundRecording |
+| `director` | Film |
+| `writer` | Performance |
+| `interviewee` | Interview |
+| `inventor` | Patent |
+
+### Important notes
+
+- The `key` must be unique across all sources and match the keys used in `[@key]` citations.
+- The `year` field can be a number or string in YAML; it is treated as a string in the output.
+- Word will render the bibliography and format citations according to the selected style (defaults to APA 6th Edition). You can change the style in Word after opening the document.
+- The document will prompt to update fields when opened; accept this to ensure citations and bibliography render correctly.
+
+---
+
 ## Constraints and Limits
 
 ### Heading levels: 1--4 only
@@ -163,6 +472,9 @@ Horizontal rules (`---`) are recognized but **produce no visible output** in the
 | Table with caption | `^^^ ... ^^^ Caption` | Auto-numbered as "Table N:" |
 | Image width | `^^^ Caption \|> 300` | Pixels, converted at 96 DPI |
 | Table width | `^^^ Caption \|> 50` | Percentage of page width |
+| Inline citation | `[@key]` | Word CITATION field |
+| Multiple citations | `[@key1; @key2]` | Semicolon-separated |
+| References block | `` ```references `` | YAML source definitions |
 | Underline | `<u>text</u>` | HTML inline tags |
 | Strikethrough | `~~text~~` | GFM extension |
 | Smart quotes | `"text"` / `'text'` | Automatic |

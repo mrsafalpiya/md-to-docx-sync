@@ -14,6 +14,7 @@
     <PackageReference Include="DocumentFormat.OpenXml.Linq" Version="3.4.1" />
     <PackageReference Include="Markdig" Version="0.44.0" />
     <PackageReference Include="SixLabors.ImageSharp" Version="3.1.12" />
+    <PackageReference Include="YamlDotNet" Version="16.3.0" />
   </ItemGroup>
 
 </Project>

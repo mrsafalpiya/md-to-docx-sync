@@ -1,8 +1,11 @@
+using System.Xml.Linq;
 using DocumentFormat.OpenXml;
+using DocumentFormat.OpenXml.CustomXmlDataProperties;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using md_to_docx_sync.Enums;
 using md_to_docx_sync.Interfaces;
+using md_to_docx_sync.Models;
 using SixLabors.ImageSharp;
 
 namespace md_to_docx_sync.Services;
@@ -16,6 +19,7 @@ public class DocxContent : IDocxContent
     private int _localListId = 0; // Local list ID (0-based, will be offset when writing)
     private int _figureSequenceNumber = 0; // Counter for figure numbering
     private int _tableSequenceNumber = 0; // Counter for table numbering
+    private List<ReferenceSource>? _references = null; // Bibliography sources
 
     // Current elements being built
     private Paragraph? _currentParagraph = null;
@@ -394,6 +398,63 @@ public class DocxContent : IDocxContent
         }
     }
 
+    public void AddCitation(params string[] keys)
+    {
+        if (keys.Length == 0) return;
+        EnsureCurrentParagraph();
+
+        for (int i = 0; i < keys.Length; i++)
+        {
+            // Build field code:
+            //   First citation:      CITATION key \l 1033
+            //   Subsequent (merged):  CITATION key \l 1033  \m firstKey
+            string fieldCode = i == 0
+                ? $" CITATION {keys[i]} \\l 1033 "
+                : $" CITATION {keys[i]} \\l 1033  \\m {keys[0]}";
+
+            // CITATION field begin
+            _currentParagraph!.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.Begin }));
+
+            // CITATION field code
+            _currentParagraph.Append(new Run(
+                new FieldCode(fieldCode) { Space = SpaceProcessingModeValues.Preserve }));
+
+            // CITATION field separator
+            _currentParagraph.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.Separate }));
+
+            // Placeholder result text with NoProof (Word will replace this when fields are updated)
+            var resultRun = new Run();
+            resultRun.Append(new RunProperties(new NoProof()));
+            resultRun.Append(new Text($"[{keys[i]}]") { Space = SpaceProcessingModeValues.Preserve });
+            _currentParagraph.Append(resultRun);
+
+            // CITATION field end
+            _currentParagraph.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.End }));
+        }
+    }
+
+    public void AddBibliography(List<ReferenceSource> references)
+    {
+        _references = references;
+    }
+
+    public void RemoveLastHeading()
+    {
+        // Walk backwards to find the last paragraph with a heading style
+        for (int i = _elements.Count - 1; i >= 0; i--)
+        {
+            if (_elements[i] is Paragraph paragraph)
+            {
+                var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+                if (styleId != null && styleId.StartsWith("Heading"))
+                {
+                    _elements.RemoveAt(i);
+                    return;
+                }
+            }
+        }
+    }
+
     /// <summary>
     /// Writes the collected content to a WordprocessingDocument.
     /// </summary>
@@ -411,6 +472,9 @@ public class DocxContent : IDocxContent
 
         // Mark TOC fields as dirty to force Word to regenerate the Table of Contents
         MarkTocFieldsAsDirty(document);
+
+        // Write bibliography sources to CustomXmlPart if any references were provided
+        WriteBibliographySources(document);
 
         // Calculate ID offset based on existing numbering definitions
         int idOffset = 0;
@@ -546,6 +610,262 @@ public class DocxContent : IDocxContent
                 simpleField.Dirty = true;
             }
         }
+    }
+
+    /// <summary>
+    /// Writes bibliography sources to a CustomXmlPart using Word's bibliography XML schema.
+    /// If the template already contains a bibliography CustomXmlPart, the sources are merged into it.
+    /// Otherwise a new CustomXmlPart is created.
+    /// This allows Word to recognize the sources in "Manage Sources" and render CITATION / BIBLIOGRAPHY fields.
+    /// </summary>
+    private void WriteBibliographySources(WordprocessingDocument document)
+    {
+        if (_references == null || _references.Count == 0) return;
+
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null) return;
+
+        XNamespace bNs = "http://schemas.openxmlformats.org/officeDocument/2006/bibliography";
+
+        // Try to find an existing bibliography CustomXmlPart in the template
+        CustomXmlPart? existingBibPart = null;
+        XDocument? existingDoc = null;
+
+        foreach (var customXmlPart in mainPart.CustomXmlParts)
+        {
+            try
+            {
+                using var stream = customXmlPart.GetStream(FileMode.Open);
+                var doc = XDocument.Load(stream);
+                if (doc.Root?.Name.Namespace == bNs)
+                {
+                    existingBibPart = customXmlPart;
+                    existingDoc = doc;
+                    break;
+                }
+            }
+            catch
+            {
+                // Not a valid XML part or not bibliography data — skip
+            }
+        }
+
+        if (existingBibPart != null && existingDoc?.Root != null)
+        {
+            // Merge new sources into the existing bibliography part
+            foreach (var reference in _references)
+            {
+                existingDoc.Root.Add(CreateSourceXElement(reference, bNs));
+            }
+
+            using var writeStream = existingBibPart.GetStream(FileMode.Create);
+            existingDoc.Save(writeStream);
+
+            Console.WriteLine($"[INFO] Merged {_references.Count} bibliography source(s) into existing bibliography data.");
+        }
+        else
+        {
+            // Create a brand-new bibliography CustomXmlPart
+            var sourcesElement = new XElement(bNs + "Sources",
+                new XAttribute(XNamespace.Xmlns + "b", bNs.NamespaceName),
+                new XAttribute("SelectedStyle", "\\APASixthEditionOfficeOnline.xsl"),
+                new XAttribute("StyleName", "APA"),
+                new XAttribute("Version", "6"),
+                _references.Select(r => CreateSourceXElement(r, bNs))
+            );
+
+            var xmlDoc = new XDocument(
+                new XDeclaration("1.0", "UTF-8", "yes"),
+                sourcesElement
+            );
+
+            var customXmlPart = mainPart.AddCustomXmlPart(CustomXmlPartType.CustomXml);
+            using (var stream = customXmlPart.GetStream(FileMode.Create))
+            {
+                xmlDoc.Save(stream);
+            }
+
+            // Add CustomXmlPropertiesPart using SDK types for correct XML serialization
+            var propsPart = customXmlPart.AddNewPart<CustomXmlPropertiesPart>();
+            propsPart.DataStoreItem = new DataStoreItem
+            {
+                ItemId = $"{{{Guid.NewGuid()}}}"
+            };
+            propsPart.DataStoreItem.Append(
+                new SchemaReferences(
+                    new SchemaReference { Uri = bNs.NamespaceName }
+                )
+            );
+            propsPart.DataStoreItem.Save();
+
+            Console.WriteLine($"[INFO] Created new bibliography data with {_references.Count} source(s).");
+        }
+    }
+
+    /// <summary>
+    /// Creates an XElement representing a single bibliography source in Word's XML format.
+    /// </summary>
+    private static XElement CreateSourceXElement(ReferenceSource reference, XNamespace bNs)
+    {
+        var sourceElement = new XElement(bNs + "Source");
+
+        // Tag (citation key)
+        sourceElement.Add(new XElement(bNs + "Tag", reference.Key));
+
+        // SourceType (mapped from user-friendly name to Word's internal name)
+        string wordSourceType = MapSourceType(reference.Type);
+        sourceElement.Add(new XElement(bNs + "SourceType", wordSourceType));
+
+        // GUID
+        sourceElement.Add(new XElement(bNs + "Guid", $"{{{Guid.NewGuid()}}}"));
+
+        // LCID (locale identifier — 0 = default)
+        sourceElement.Add(new XElement(bNs + "LCID", "0"));
+
+        // Author container (holds all person-type fields)
+        var authorContainer = new XElement(bNs + "Author");
+        bool hasAuthors = false;
+
+        // Process all fields
+        foreach (var (fieldName, fieldValue) in reference.Fields)
+        {
+            if (string.IsNullOrWhiteSpace(fieldValue)) continue;
+
+            // Check if this is a person/name field
+            string? authorRole = GetAuthorRole(fieldName);
+            if (authorRole != null)
+            {
+                var nameListElement = ParseNameList(fieldValue, bNs);
+                authorContainer.Add(new XElement(bNs + authorRole, nameListElement));
+                hasAuthors = true;
+                continue;
+            }
+
+            // Check if this is a simple field
+            string? xmlElementName = MapFieldToXmlElement(fieldName);
+            if (xmlElementName != null)
+            {
+                sourceElement.Add(new XElement(bNs + xmlElementName, fieldValue));
+            }
+        }
+
+        if (hasAuthors)
+        {
+            sourceElement.Add(authorContainer);
+        }
+
+        return sourceElement;
+    }
+
+    /// <summary>
+    /// Maps user-friendly source type names to Word's internal SourceType values.
+    /// </summary>
+    private static string MapSourceType(string type)
+    {
+        return type switch
+        {
+            "Book" => "Book",
+            "BookSection" => "BookSection",
+            "JournalArticle" => "JournalArticle",
+            "ArticleInAPeriodical" => "ArticleInAPeriodical",
+            "ConferenceProceedings" => "ConferenceProceedings",
+            "Report" => "Report",
+            "WebSite" => "InternetSite",
+            "DocumentFromWebSite" => "DocumentFromInternetSite",
+            "ElectronicSource" => "ElectronicSource",
+            "Art" => "Art",
+            "SoundRecording" => "SoundRecording",
+            "Performance" => "Performance",
+            "Film" => "Film",
+            "Interview" => "Interview",
+            "Patent" => "Patent",
+            "Case" => "Case",
+            "Misc" => "Misc",
+            _ => "Misc"
+        };
+    }
+
+    /// <summary>
+    /// Returns the Word XML author role element name for person-type YAML fields, or null if not a person field.
+    /// </summary>
+    private static string? GetAuthorRole(string fieldName)
+    {
+        return fieldName switch
+        {
+            "author" => "Author",
+            "editor" => "Editor",
+            "artist" => "Artist",
+            "composer" => "Composer",
+            "director" => "Director",
+            "writer" => "Writer",
+            "interviewee" => "Interviewee",
+            "inventor" => "Inventor",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Maps YAML field names to Word bibliography XML element names.
+    /// Returns null for unrecognized fields.
+    /// </summary>
+    private static string? MapFieldToXmlElement(string fieldName)
+    {
+        return fieldName switch
+        {
+            "title" => "Title",
+            "year" => "Year",
+            "city" => "City",
+            "publisher" => "Publisher",
+            "edition" => "Edition",
+            "pages" => "Pages",
+            "volume" => "Volume",
+            "issue" => "Issue",
+            "month" => "Month",
+            "day" => "Day",
+            "yearAccessed" => "YearAccessed",
+            "monthAccessed" => "MonthAccessed",
+            "dayAccessed" => "DayAccessed",
+            "url" => "URL",
+            "bookTitle" => "BookTitle",
+            "journalName" => "JournalName",
+            "periodicalTitle" => "PeriodicalTitle",
+            "nameOfWebPage" => "InternetSiteTitle",
+            "institution" => "Institution",
+            "productionCompany" => "ProductionCompany",
+            "countryRegion" => "CountryRegion",
+            "patentNumber" => "PatentNumber",
+            "reporter" => "Reporter",
+            _ => null
+        };
+    }
+
+    /// <summary>
+    /// Parses a name string (e.g., "Kramer, James D; Chen, Jacky") into a Word NameList XElement.
+    /// Names are semicolon-separated, each in "Last, First" format.
+    /// </summary>
+    private static XElement ParseNameList(string nameString, XNamespace bNs)
+    {
+        var nameList = new XElement(bNs + "NameList");
+
+        var people = nameString.Split(';', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+        foreach (var person in people)
+        {
+            var personElement = new XElement(bNs + "Person");
+            var parts = person.Split(',', 2, StringSplitOptions.TrimEntries);
+
+            if (parts.Length >= 1)
+            {
+                personElement.Add(new XElement(bNs + "Last", parts[0]));
+            }
+            if (parts.Length >= 2)
+            {
+                personElement.Add(new XElement(bNs + "First", parts[1]));
+            }
+
+            nameList.Add(personElement);
+        }
+
+        return nameList;
     }
 
     /// <summary>
@@ -971,6 +1291,7 @@ public class DocxContent : IDocxContent
         _localListId = 0;
         _figureSequenceNumber = 0;
         _tableSequenceNumber = 0;
+        _references = null;
         FinalizeCurrentContext();
     }
 }
