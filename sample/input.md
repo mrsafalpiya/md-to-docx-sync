@@ -183,6 +183,12 @@ def greet(name):
 print(greet('World'))
 ```
 
+#### Codeblock With Formatting
+
+```fmt:bold,italic
+This is **bold** and _italic_, but ~~this~~ is not struck through.
+```
+
 End of example content.
 
 ---

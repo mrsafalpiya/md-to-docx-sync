@@ -105,6 +105,60 @@ Requires exactly two tildes on each side.
 
 ---
 
+## Formatted Code Blocks (`fmt`)
+
+By default, content inside fenced code blocks is treated as plain literal text with no inline formatting. The `fmt` language identifier enables Markdown inline formatting to be parsed and applied inside a code-styled block.
+
+The block still uses the `Code` paragraph style, but the content is processed for the specified formatting types instead of being output verbatim.
+
+### Enable all formatting
+
+Using `fmt` alone enables **all** inline formatting types (bold, italic, underline, strikethrough):
+
+````markdown
+```fmt
+This is **bold**, _italic_, <u>underlined</u>, and ~~struck through~~.
+A second line with **nested _bold italic_**.
+```
+````
+
+### Enable specific formatting types
+
+Append a colon and a comma-separated list of formatting types to restrict which types are active:
+
+````markdown
+```fmt:bold,italic
+This is **bold** and _italic_, but ~~this~~ is not struck through.
+```
+````
+
+````markdown
+```fmt:underline
+Only <u>underline</u> works here; **bold** and _italic_ are plain text.
+```
+````
+
+### Available options
+
+| Option | Effect |
+| ------ | ------ |
+| `bold` | Enables bold (`**text**`) |
+| `italic` | Enables italic (`_text_` or `*text*`) |
+| `underline` | Enables underline (`<u>text</u>`) |
+| `strikethrough` | Enables strikethrough (`~~text~~`) |
+
+Multiple options are combined with commas: `fmt:bold,italic,underline`.
+
+### Important notes
+
+- Unrecognised option names emit a warning and are ignored.
+- Each line in the block is parsed as an independent inline context; block-level constructs (headings, lists, etc.) inside the block are not rendered.
+- Lines are separated by line breaks within a single `Code`-styled paragraph, matching the normal code block layout.
+- Smart typography (curly quotes, em-dashes, etc.) is always active because it is applied at the Markdig pipeline level.
+- When a formatting type is **disabled**, its delimiter characters appear literally in the output. For example, with `fmt:italic`, writing `**bold**` outputs the literal text `**bold**` (stars included), and `~~strike~~` outputs `~~strike~~` (tildes included). Likewise, `<u>text</u>` outputs the literal HTML tags when underline is disabled. This lets you write the raw syntax characters without them being silently dropped.
+
+---
+
 ## Smart Typography (SmartyPants)
 
 The converter automatically transforms plain-text punctuation into typographic equivalents. This happens transparently -- you write standard ASCII characters and they become proper Unicode glyphs in the DOCX output.
@@ -477,6 +531,8 @@ Horizontal rules (`---`) are recognized but **produce no visible output** in the
 | References block | `` ```references `` | YAML source definitions |
 | Underline | `<u>text</u>` | HTML inline tags |
 | Strikethrough | `~~text~~` | GFM extension |
+| Formatted code block (all) | ` ```fmt ` | All inline formatting enabled |
+| Formatted code block (select) | ` ```fmt:bold,italic ` | Only specified types enabled |
 | Smart quotes | `"text"` / `'text'` | Automatic |
 | En-dash | `--` | Automatic |
 | Em-dash | `---` | Automatic |

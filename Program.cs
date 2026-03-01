@@ -156,7 +156,8 @@ void AddTextWithCitations(string text, bool isBold, bool isItalic, bool isUnderl
 }
 
 // Process inline content with formatting
-void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false)
+void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false,
+    bool allowBold = true, bool allowItalic = true, bool allowUnderline = true, bool allowStrikethrough = true)
 {
     if (container == null) return;
 
@@ -171,15 +172,28 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
             bool newBold = isBold;
             bool newItalic = isItalic;
             bool newStrikethrough = isStrikethrough;
+            bool fmtDisabled = false;
+            string delim = new string(emphasis.DelimiterChar, emphasis.DelimiterCount);
 
             if (emphasis.DelimiterChar == '~' && emphasis.DelimiterCount == 2)
-                newStrikethrough = true;
+            {
+                if (allowStrikethrough) newStrikethrough = true;
+                else fmtDisabled = true;
+            }
             else if (emphasis.DelimiterCount == 2)
-                newBold = true;
+            {
+                if (allowBold) newBold = true;
+                else fmtDisabled = true;
+            }
             else
-                newItalic = true;
+            {
+                if (allowItalic) newItalic = true;
+                else fmtDisabled = true;
+            }
 
-            ProcessInlines(emphasis, newBold, newItalic, isUnderline, newStrikethrough);
+            if (fmtDisabled) docxContent.AddText(delim, isBold, isItalic, isUnderline, isStrikethrough);
+            ProcessInlines(emphasis, newBold, newItalic, isUnderline, newStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+            if (fmtDisabled) docxContent.AddText(delim, isBold, isItalic, isUnderline, isStrikethrough);
         }
         else if (inline is Markdig.Syntax.Inlines.CodeInline codeInline)
         {
@@ -204,14 +218,8 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
         }
         else if (inline is Markdig.Syntax.Inlines.HtmlInline htmlInline)
         {
-            // Handle <u> and </u> tags for underline
-            string tag = htmlInline.Tag.ToLowerInvariant();
-            if (tag == "<u>")
-            {
-                // Find content until </u> - this is handled by the next iterations
-                // We need to track underline state
-            }
-            // We'll handle underline by detecting <u> start/end in a different way
+            // <u>/<\/u> are handled in ProcessInlinesWithUnderline; emit literally here
+            docxContent.AddText(htmlInline.Tag, isBold, isItalic, isUnderline, isStrikethrough);
         }
         else if (inline is Markdig.Syntax.Inlines.LineBreakInline)
         {
@@ -219,13 +227,14 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
         }
         else if (inline is Markdig.Syntax.Inlines.ContainerInline nestedContainer)
         {
-            ProcessInlines(nestedContainer, isBold, isItalic, isUnderline, isStrikethrough);
+            ProcessInlines(nestedContainer, isBold, isItalic, isUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
         }
     }
 }
 
 // Process inline content with HTML underline tag detection
-void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isStrikethrough = false)
+void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isStrikethrough = false,
+    bool allowBold = true, bool allowItalic = true, bool allowUnderline = true, bool allowStrikethrough = true)
 {
     if (container == null) return;
 
@@ -240,9 +249,15 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
         {
             string tag = htmlInline.Tag.ToLowerInvariant();
             if (tag == "<u>")
-                currentUnderline = true;
+            {
+                if (allowUnderline) currentUnderline = true;
+                else docxContent.AddText(htmlInline.Tag, isBold, isItalic, currentUnderline, isStrikethrough);
+            }
             else if (tag == "</u>")
-                currentUnderline = false;
+            {
+                if (allowUnderline) currentUnderline = false;
+                else docxContent.AddText(htmlInline.Tag, isBold, isItalic, currentUnderline, isStrikethrough);
+            }
         }
         else if (inline is Markdig.Syntax.Inlines.LiteralInline literal)
         {
@@ -253,15 +268,28 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
             bool newBold = isBold;
             bool newItalic = isItalic;
             bool newStrikethrough = isStrikethrough;
+            bool fmtDisabled = false;
+            string delim = new string(emphasis.DelimiterChar, emphasis.DelimiterCount);
 
             if (emphasis.DelimiterChar == '~' && emphasis.DelimiterCount == 2)
-                newStrikethrough = true;
+            {
+                if (allowStrikethrough) newStrikethrough = true;
+                else fmtDisabled = true;
+            }
             else if (emphasis.DelimiterCount == 2)
-                newBold = true;
+            {
+                if (allowBold) newBold = true;
+                else fmtDisabled = true;
+            }
             else
-                newItalic = true;
+            {
+                if (allowItalic) newItalic = true;
+                else fmtDisabled = true;
+            }
 
-            ProcessInlines(emphasis, newBold, newItalic, currentUnderline, newStrikethrough);
+            if (fmtDisabled) docxContent.AddText(delim, isBold, isItalic, currentUnderline, isStrikethrough);
+            ProcessInlines(emphasis, newBold, newItalic, currentUnderline, newStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+            if (fmtDisabled) docxContent.AddText(delim, isBold, isItalic, currentUnderline, isStrikethrough);
         }
         else if (inline is Markdig.Syntax.Inlines.CodeInline codeInline)
         {
@@ -290,7 +318,7 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
         }
         else if (inline is Markdig.Syntax.Inlines.ContainerInline nestedContainer)
         {
-            ProcessInlines(nestedContainer, isBold, isItalic, currentUnderline, isStrikethrough);
+            ProcessInlines(nestedContainer, isBold, isItalic, currentUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
         }
     }
 }
@@ -361,6 +389,7 @@ void ProcessMarkdownNode(MarkdownObject node)
             // Check if this is a references block
             if (fencedCodeBlock.Info?.Trim() == "references")
             {
+
                 var yamlContent = string.Join("\n", fencedCodeBlock.Lines);
                 try
                 {
@@ -380,6 +409,58 @@ void ProcessMarkdownNode(MarkdownObject node)
                 catch (Exception ex)
                 {
                     Console.Error.WriteLine($"[ERROR] Failed to parse references YAML: {ex.Message}");
+                }
+                break;
+            }
+
+            // Check for fmt: formatted code block
+            var fmtInfo = fencedCodeBlock.Info?.Trim() ?? "";
+            if (fmtInfo == "fmt" || fmtInfo.StartsWith("fmt:"))
+            {
+                bool allowBold = false, allowItalic = false, allowUnderline = false, allowStrikethrough = false;
+
+                if (fmtInfo == "fmt")
+                {
+                    allowBold = allowItalic = allowUnderline = allowStrikethrough = true;
+                }
+                else
+                {
+                    var opts = fmtInfo.Substring(4).Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries);
+                    foreach (var opt in opts)
+                    {
+                        switch (opt.ToLowerInvariant())
+                        {
+                            case "bold": allowBold = true; break;
+                            case "italic": allowItalic = true; break;
+                            case "underline": allowUnderline = true; break;
+                            case "strikethrough": allowStrikethrough = true; break;
+                            default:
+                                Console.WriteLine($"[WARNING] Unknown fmt option '{opt}'. Valid options: bold, italic, underline, strikethrough.");
+                                break;
+                        }
+                    }
+                }
+
+                docxContent.NewParagraph(isLiteral: true);
+                var fmtLineGroup = fencedCodeBlock.Lines;
+                int fmtLineCount = fmtLineGroup.Count;
+                for (int fmtLineIdx = 0; fmtLineIdx < fmtLineCount; fmtLineIdx++)
+                {
+                    var lineText = fmtLineGroup.Lines[fmtLineIdx].Slice.ToString();
+                    var lineDoc = Markdown.Parse(lineText, pipeline);
+                    if (lineDoc.FirstOrDefault() is ParagraphBlock fmtPara)
+                    {
+                        ProcessInlinesWithUnderline(fmtPara.Inline,
+                            allowBold: allowBold, allowItalic: allowItalic,
+                            allowUnderline: allowUnderline, allowStrikethrough: allowStrikethrough);
+                    }
+                    else
+                    {
+                        docxContent.AddText(lineText);
+                    }
+
+                    if (fmtLineIdx < fmtLineCount - 1)
+                        docxContent.AddLineBreak();
                 }
                 break;
             }
