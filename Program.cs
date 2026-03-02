@@ -447,7 +447,16 @@ void ProcessMarkdownNode(MarkdownObject node)
                 for (int fmtLineIdx = 0; fmtLineIdx < fmtLineCount; fmtLineIdx++)
                 {
                     var lineText = fmtLineGroup.Lines[fmtLineIdx].Slice.ToString();
-                    var lineDoc = Markdown.Parse(lineText, pipeline);
+
+                    // Separate leading whitespace so Markdig doesn't interpret
+                    // indented lines as indented code blocks when parsing inline content.
+                    var trimmedLine = lineText.TrimStart();
+                    var leadingWhitespace = lineText.Substring(0, lineText.Length - trimmedLine.Length);
+
+                    if (leadingWhitespace.Length > 0)
+                        docxContent.AddText(leadingWhitespace);
+
+                    var lineDoc = Markdown.Parse(trimmedLine, pipeline);
                     if (lineDoc.FirstOrDefault() is ParagraphBlock fmtPara)
                     {
                         ProcessInlinesWithUnderline(fmtPara.Inline,
@@ -456,7 +465,7 @@ void ProcessMarkdownNode(MarkdownObject node)
                     }
                     else
                     {
-                        docxContent.AddText(lineText);
+                        docxContent.AddText(trimmedLine);
                     }
 
                     if (fmtLineIdx < fmtLineCount - 1)

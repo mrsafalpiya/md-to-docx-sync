@@ -185,8 +185,8 @@ print(greet('World'))
 
 #### Codeblock With Formatting
 
-```fmt:bold,italic
-This is **bold** and _italic_, but ~~this~~ is not struck through.
+```fmt:underline
+This is <u>underline</u>, **bold** and _italic_, but ~~this~~ is not struck through.
 ```
 
 End of example content.
