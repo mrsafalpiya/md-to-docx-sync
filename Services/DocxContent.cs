@@ -930,11 +930,20 @@ public class DocxContent : IDocxContent
         var drawingId = GenerateUniqueId();
         var imageId = GenerateUniqueId();
 
+        const int borderWidthEmu = 12700;
+        const long borderEffectExtentEmu = borderWidthEmu / 2L;
+
         // Create the drawing element with border
         var element = new DocumentFormat.OpenXml.Wordprocessing.Drawing(
             new DocumentFormat.OpenXml.Drawing.Wordprocessing.Inline(
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.Extent() { Cx = imageWidthEmu, Cy = imageHeightEmu },
-                new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent() { LeftEdge = 0L, TopEdge = 0L, RightEdge = 0L, BottomEdge = 0L },
+                new DocumentFormat.OpenXml.Drawing.Wordprocessing.EffectExtent()
+                {
+                    LeftEdge = borderEffectExtentEmu,
+                    TopEdge = borderEffectExtentEmu,
+                    RightEdge = borderEffectExtentEmu,
+                    BottomEdge = borderEffectExtentEmu
+                },
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.DocProperties() { Id = (uint)drawingId, Name = $"Picture {drawingId}" },
                 new DocumentFormat.OpenXml.Drawing.Wordprocessing.NonVisualGraphicFrameDrawingProperties(
                     new DocumentFormat.OpenXml.Drawing.GraphicFrameLocks() { NoChangeAspect = true }
@@ -967,7 +976,7 @@ public class DocxContent : IDocxContent
                                         new DocumentFormat.OpenXml.Drawing.RgbColorModelHex() { Val = "000000" }
                                     )
                                 )
-                                { Width = 12700 }
+                                { Width = borderWidthEmu }
                             )
                         )
                     )
