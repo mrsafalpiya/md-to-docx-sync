@@ -36,7 +36,7 @@ if (string.IsNullOrEmpty(outputDOCXFilePath))
 string? inputMDFileDir = Path.GetDirectoryName(Path.GetFullPath(inputMDFilePath));
 
 // Read and parse Markdown File
-var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseSmartyPants().Build();
+var pipeline = new MarkdownPipelineBuilder().UseAdvancedExtensions().UseCustomContainers().UseSmartyPants().Build();
 
 // Pre-process: replace [@key] / [@key1; @key2] with «key» / «key1;key2» placeholders
 // so Markdig's link parser doesn't consume the brackets and break citation detection.
@@ -658,6 +658,11 @@ void ProcessMarkdownNode(MarkdownObject node)
 
         case ThematicBreakBlock:
             // Horizontal rule - skip or could add a separator
+            break;
+
+        case Markdig.Extensions.CustomContainers.CustomContainer customContainer
+            when string.Equals(customContainer.Info?.Trim(), "pagebreak", StringComparison.OrdinalIgnoreCase):
+            docxContent.AddPageBreak();
             break;
 
         case Markdig.Extensions.Figures.Figure figure:

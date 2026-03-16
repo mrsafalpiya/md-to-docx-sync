@@ -14,6 +14,7 @@ public interface IDocxContent
     // Text
     void AddText(string text, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false, bool isLiteral = false);
     void AddLineBreak();
+    void AddPageBreak();
 
     // List
     void NewList(DocxListType type);

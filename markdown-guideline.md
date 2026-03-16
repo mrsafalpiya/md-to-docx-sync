@@ -76,6 +76,25 @@ The value (`50`) is a **percentage of page width** (1--100). If omitted, the tab
 
 ---
 
+## Page Break (`:::pagebreak`)
+
+Use a Markdig custom container with `pagebreak` info to insert a DOCX page break.
+
+```markdown
+:::pagebreak
+:::
+```
+
+This produces a hard page break at that location in the output document.
+
+### Syntax rules
+
+- The marker must be its own container block (`:::pagebreak` followed by closing `:::`).
+- The `pagebreak` info value is case-insensitive.
+- No visible content is rendered for this block; it only inserts a page break.
+
+---
+
 ## Underline (`<u>`)
 
 Standard Markdown has no underline syntax. This converter supports underline through inline HTML tags:
@@ -524,6 +543,7 @@ Horizontal rules (`---`) are recognized but **produce no visible output** in the
 | ------- | ------ | ----- |
 | Figure with caption | `^^^ ... ^^^ Caption` | Auto-numbered as "Figure N:" |
 | Table with caption | `^^^ ... ^^^ Caption` | Auto-numbered as "Table N:" |
+| Page break | `:::pagebreak ... :::` | Inserts a hard page break |
 | Image width | `^^^ Caption \|> 300` | Pixels, converted at 96 DPI |
 | Table width | `^^^ Caption \|> 50` | Percentage of page width |
 | Inline citation | `[@key]` | Word CITATION field |

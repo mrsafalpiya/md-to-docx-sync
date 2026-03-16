@@ -150,6 +150,20 @@ public class DocxContent : IDocxContent
         _currentParagraph!.Append(new Run(new Break()));
     }
 
+    public void AddPageBreak()
+    {
+        FinalizeCurrentContext();
+
+        var paragraph = new Paragraph(
+            new ParagraphProperties(
+                new ParagraphStyleId() { Val = BodyStyleId }
+            ),
+            new Run(new Break() { Type = BreakValues.Page })
+        );
+
+        _elements.Add(paragraph);
+    }
+
     public void NewList(DocxListType type)
     {
         FinalizeCurrentContext();
