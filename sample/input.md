@@ -46,6 +46,29 @@ Short note content inside a level 4 heading.
 
 ---
 
+# Page Breaks and Whitespace
+
+This section demonstrates how to force content onto a new page and manage vertical whitespace.
+
+## Example Page Break
+
+Below this paragraph is a hard page break.
+
+:::pagebreak
+:::
+
+This content starts on a new page.
+
+## Empty Paragraph Example
+
+Sometimes you need a little more space. The line below this has `&nbsp;`:
+
+&nbsp;
+
+This text follows an empty paragraph.
+
+---
+
 # Usage Examples
 
 Another top-level section to show repeated headings and additional constructs.

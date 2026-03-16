@@ -95,6 +95,18 @@ This produces a hard page break at that location in the output document.
 
 ---
 
+## Empty Paragraph (`&nbsp;`)
+
+To insert an empty paragraph (a blank line) that isn't collapsed, use the non-breaking space HTML entity:
+
+```markdown
+&nbsp;
+```
+
+This is useful for adding vertical whitespace between elements when a standard double-newline isn't enough or when you need to ensure a paragraph exists with a specific style even if it's empty.
+
+---
+
 ## Underline (`<u>`)
 
 Standard Markdown has no underline syntax. This converter supports underline through inline HTML tags:
@@ -544,6 +556,7 @@ Horizontal rules (`---`) are recognized but **produce no visible output** in the
 | Figure with caption | `^^^ ... ^^^ Caption` | Auto-numbered as "Figure N:" |
 | Table with caption | `^^^ ... ^^^ Caption` | Auto-numbered as "Table N:" |
 | Page break | `:::pagebreak ... :::` | Inserts a hard page break |
+| Empty Paragraph | `&nbsp;` | Inserts a non-empty blank line |
 | Image width | `^^^ Caption \|> 300` | Pixels, converted at 96 DPI |
 | Table width | `^^^ Caption \|> 50` | Percentage of page width |
 | Inline citation | `[@key]` | Word CITATION field |
