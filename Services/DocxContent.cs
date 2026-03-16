@@ -293,7 +293,7 @@ public class DocxContent : IDocxContent
         _currentTableRowIndex++;
     }
 
-    public void NewCell()
+    public void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false)
     {
         if (_currentTableRow == null)
         {
@@ -308,6 +308,21 @@ public class DocxContent : IDocxContent
                 new RightBorder() { Val = BorderValues.Single, Color = "000000", Size = 4 }
             )
         );
+
+        columnSpan = Math.Max(1, columnSpan);
+        if (columnSpan > 1)
+        {
+            cellProperties.Append(new GridSpan() { Val = columnSpan });
+        }
+
+        if (verticalMergeStart)
+        {
+            cellProperties.Append(new VerticalMerge() { Val = MergedCellValues.Restart });
+        }
+        else if (verticalMergeContinue)
+        {
+            cellProperties.Append(new VerticalMerge() { Val = MergedCellValues.Continue });
+        }
 
         _currentTableCell = new TableCell(cellProperties);
         _currentTableRow.Append(_currentTableCell);

@@ -26,7 +26,7 @@ public interface IDocxContent
     /// <param name="widthPercent">Optional width as percentage (1-100). Defaults to 100 (full width).</param>
     void NewTable(string? caption = null, int? widthPercent = null);
     void NewRow();
-    void NewCell();
+    void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false);
 
     // Images
     /// <summary>

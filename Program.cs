@@ -356,6 +356,165 @@ void ProcessListBlock(ListBlock listBlock, int nestingLevel = 0)
     }
 }
 
+void ProcessTableCellContent(Markdig.Extensions.Tables.TableCell tableCell)
+{
+    bool hasRenderedLine = false;
+
+    void EnsureLineStart()
+    {
+        if (hasRenderedLine)
+        {
+            docxContent.AddLineBreak();
+        }
+        hasRenderedLine = true;
+    }
+
+    void ProcessTableCellBlock(Block block)
+    {
+        switch (block)
+        {
+            case ParagraphBlock paragraphBlock:
+                EnsureLineStart();
+                ProcessInlinesWithUnderline(paragraphBlock.Inline);
+                break;
+
+            case QuoteBlock quoteBlock:
+                foreach (var quoteChild in quoteBlock)
+                {
+                    if (quoteChild is ParagraphBlock quotedParagraph)
+                    {
+                        EnsureLineStart();
+                        docxContent.AddText("> ");
+                        ProcessInlinesWithUnderline(quotedParagraph.Inline);
+                    }
+                    else
+                    {
+                        ProcessTableCellBlock(quoteChild);
+                    }
+                }
+                break;
+
+            case ListBlock listBlock:
+                int orderedIndex = 1;
+                foreach (var listItem in listBlock)
+                {
+                    if (listItem is not ListItemBlock listItemBlock) continue;
+
+                    foreach (var listItemChild in listItemBlock)
+                    {
+                        if (listItemChild is ParagraphBlock listItemParagraph)
+                        {
+                            EnsureLineStart();
+                            docxContent.AddText(listBlock.IsOrdered ? $"{orderedIndex}. " : "• ");
+                            ProcessInlinesWithUnderline(listItemParagraph.Inline);
+                        }
+                        else
+                        {
+                            ProcessTableCellBlock(listItemChild);
+                        }
+                    }
+
+                    if (listBlock.IsOrdered) orderedIndex++;
+                }
+                break;
+
+            case ContainerBlock containerBlock:
+                foreach (var childBlock in containerBlock)
+                {
+                    ProcessTableCellBlock(childBlock);
+                }
+                break;
+
+            case LeafBlock leafBlock when leafBlock.Inline != null:
+                EnsureLineStart();
+                ProcessInlinesWithUnderline(leafBlock.Inline);
+                break;
+        }
+    }
+
+    foreach (var cellContent in tableCell)
+    {
+        ProcessTableCellBlock(cellContent);
+    }
+}
+
+void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null, int? widthPercent = null)
+{
+    docxContent.NewTable(caption, widthPercent);
+
+    // Tracks pending vertical merges per column index (remaining continuation rows).
+    var activeVerticalMerges = new Dictionary<int, int>();
+
+    foreach (var row in table)
+    {
+        if (row is not Markdig.Extensions.Tables.TableRow tableRow)
+        {
+            continue;
+        }
+
+        docxContent.NewRow();
+        int columnIndex = 0;
+
+        foreach (var cell in tableRow)
+        {
+            if (cell is not Markdig.Extensions.Tables.TableCell tableCell)
+            {
+                continue;
+            }
+
+            while (activeVerticalMerges.TryGetValue(columnIndex, out int pendingContinuations) && pendingContinuations > 0)
+            {
+                docxContent.NewCell(verticalMergeContinue: true);
+                pendingContinuations--;
+
+                if (pendingContinuations == 0) activeVerticalMerges.Remove(columnIndex);
+                else activeVerticalMerges[columnIndex] = pendingContinuations;
+
+                columnIndex++;
+            }
+
+            int columnSpan = Math.Max(1, tableCell.ColumnSpan);
+            int rowSpan = tableCell.RowSpan;
+
+            bool isVerticalMergeStart = rowSpan > 1;
+            bool isVerticalMergeContinue = rowSpan <= 0;
+
+            docxContent.NewCell(
+                columnSpan: columnSpan,
+                verticalMergeStart: isVerticalMergeStart,
+                verticalMergeContinue: isVerticalMergeContinue
+            );
+
+            if (isVerticalMergeStart)
+            {
+                int continuationRows = rowSpan - 1;
+                for (int i = 0; i < columnSpan; i++)
+                {
+                    activeVerticalMerges[columnIndex + i] = continuationRows;
+                }
+            }
+
+            if (!isVerticalMergeContinue)
+            {
+                ProcessTableCellContent(tableCell);
+            }
+
+            columnIndex += columnSpan;
+        }
+
+        while (activeVerticalMerges.TryGetValue(columnIndex, out int trailingContinuations) && trailingContinuations > 0)
+        {
+            docxContent.NewCell(verticalMergeContinue: true);
+            trailingContinuations--;
+
+            if (trailingContinuations == 0) activeVerticalMerges.Remove(columnIndex);
+            else activeVerticalMerges[columnIndex] = trailingContinuations;
+
+            columnIndex++;
+        }
+    }
+}
+
 // Main recursive processor for markdown nodes
 void ProcessMarkdownNode(MarkdownObject node)
 {
@@ -508,28 +667,7 @@ void ProcessMarkdownNode(MarkdownObject node)
                 if (child is Markdig.Extensions.Tables.Table table)
                 {
                     hasTable = true;
-                    docxContent.NewTable(figureCaption, figureWidth);
-                    foreach (var row in table)
-                    {
-                        if (row is Markdig.Extensions.Tables.TableRow tableRow)
-                        {
-                            docxContent.NewRow();
-                            foreach (var cell in tableRow)
-                            {
-                                if (cell is Markdig.Extensions.Tables.TableCell tableCell)
-                                {
-                                    docxContent.NewCell();
-                                    foreach (var cellContent in tableCell)
-                                    {
-                                        if (cellContent is ParagraphBlock cellParagraph)
-                                        {
-                                            ProcessInlinesWithUnderline(cellParagraph.Inline);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    ProcessTable(table, figureCaption, figureWidth);
                 }
                 else if (child is ParagraphBlock figParagraphBlock)
                 {
@@ -571,28 +709,7 @@ void ProcessMarkdownNode(MarkdownObject node)
 
         case Markdig.Extensions.Tables.Table table:
             // Standalone table (not in a figure)
-            docxContent.NewTable();
-            foreach (var row in table)
-            {
-                if (row is Markdig.Extensions.Tables.TableRow tableRow)
-                {
-                    docxContent.NewRow();
-                    foreach (var cell in tableRow)
-                    {
-                        if (cell is Markdig.Extensions.Tables.TableCell tableCell)
-                        {
-                            docxContent.NewCell();
-                            foreach (var cellContent in tableCell)
-                            {
-                                if (cellContent is ParagraphBlock cellParagraph)
-                                {
-                                    ProcessInlinesWithUnderline(cellParagraph.Inline);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            ProcessTable(table);
             break;
 
         case LinkReferenceDefinitionGroup:
