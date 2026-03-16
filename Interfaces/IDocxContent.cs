@@ -1,5 +1,6 @@
 using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
+using DocumentFormat.OpenXml.Wordprocessing;
 using md_to_docx_sync.Enums;
 using md_to_docx_sync.Models;
 
@@ -26,7 +27,7 @@ public interface IDocxContent
     /// <param name="widthPercent">Optional width as percentage (1-100). Defaults to 100 (full width).</param>
     void NewTable(string? caption = null, int? widthPercent = null);
     void NewRow();
-    void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false);
+    void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false, JustificationValues? alignment = null);
 
     // Images
     /// <summary>

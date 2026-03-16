@@ -93,10 +93,7 @@ public class DocxContent : IDocxContent
 
         var runProperties = new RunProperties();
 
-        // Auto-bold for header row (first row of table)
-        bool shouldBeBold = isBold || (_currentTable != null && _currentTableRowIndex == 1);
-
-        if (shouldBeBold)
+        if (isBold)
         {
             runProperties.Append(new Bold());
         }
@@ -293,7 +290,7 @@ public class DocxContent : IDocxContent
         _currentTableRowIndex++;
     }
 
-    public void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false)
+    public void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false, JustificationValues? alignment = null)
     {
         if (_currentTableRow == null)
         {
@@ -327,15 +324,14 @@ public class DocxContent : IDocxContent
         _currentTableCell = new TableCell(cellProperties);
         _currentTableRow.Append(_currentTableCell);
 
-        // Create a paragraph inside the cell for text content using 'Normal' style
-        // For first row (header), center align the text
+        // Create a paragraph inside the cell for text content using 'Normal' style.
         var paragraphProps = new ParagraphProperties(
             new ParagraphStyleId() { Val = "Normal" }
         );
 
-        if (_currentTableRowIndex == 1) // First row is header
+        if (alignment.HasValue)
         {
-            paragraphProps.Append(new Justification() { Val = JustificationValues.Center });
+            paragraphProps.Append(new Justification() { Val = alignment.Value });
         }
 
         _currentParagraph = new Paragraph(paragraphProps);

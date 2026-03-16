@@ -440,6 +440,22 @@ void ProcessTableCellContent(Markdig.Extensions.Tables.TableCell tableCell)
 
 void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null, int? widthPercent = null)
 {
+    JustificationValues? GetColumnAlignment(int columnIndex)
+    {
+        if (table.ColumnDefinitions == null || columnIndex < 0 || columnIndex >= table.ColumnDefinitions.Count)
+        {
+            return null;
+        }
+
+        return table.ColumnDefinitions[columnIndex].Alignment switch
+        {
+            Markdig.Extensions.Tables.TableColumnAlign.Left => JustificationValues.Left,
+            Markdig.Extensions.Tables.TableColumnAlign.Center => JustificationValues.Center,
+            Markdig.Extensions.Tables.TableColumnAlign.Right => JustificationValues.Right,
+            _ => null
+        };
+    }
+
     docxContent.NewTable(caption, widthPercent);
 
     // Tracks pending vertical merges per column index (remaining continuation rows).
@@ -478,11 +494,13 @@ void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null,
 
             bool isVerticalMergeStart = rowSpan > 1;
             bool isVerticalMergeContinue = rowSpan <= 0;
+            JustificationValues? columnAlignment = GetColumnAlignment(columnIndex);
 
             docxContent.NewCell(
                 columnSpan: columnSpan,
                 verticalMergeStart: isVerticalMergeStart,
-                verticalMergeContinue: isVerticalMergeContinue
+                verticalMergeContinue: isVerticalMergeContinue,
+                alignment: columnAlignment
             );
 
             if (isVerticalMergeStart)
