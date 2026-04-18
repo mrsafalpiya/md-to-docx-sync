@@ -19,7 +19,7 @@ public class DocxContent : IDocxContent
     private int _localListId = 0; // Local list ID (0-based, will be offset when writing)
     private int _figureSequenceNumber = 0; // Counter for figure numbering
     private int _tableSequenceNumber = 0; // Counter for table numbering
-    private List<ReferenceSource>? _references = null; // Bibliography sources
+    private readonly Dictionary<string, ReferenceSource> _referencesByKey = new(StringComparer.OrdinalIgnoreCase); // Bibliography sources keyed by citation tag
 
     // Current elements being built
     private Paragraph? _currentParagraph = null;
@@ -460,7 +460,71 @@ public class DocxContent : IDocxContent
 
     public void AddBibliography(List<ReferenceSource> references)
     {
-        _references = references;
+        int addedCount = 0;
+        int duplicateCount = 0;
+        int conflictingCount = 0;
+
+        foreach (var reference in references)
+        {
+            if (_referencesByKey.TryGetValue(reference.Key, out var existingReference))
+            {
+                if (HasSameReferenceDefinition(existingReference, reference))
+                {
+                    duplicateCount++;
+                }
+                else
+                {
+                    conflictingCount++;
+                    Console.WriteLine($"[WARNING] Duplicate reference key '{reference.Key}' has conflicting definitions. Keeping the first definition.");
+                }
+
+                continue;
+            }
+
+            _referencesByKey[reference.Key] = CloneReference(reference);
+            addedCount++;
+        }
+
+        Console.WriteLine($"[INFO] Accepted {addedCount} unique bibliography source(s), skipped {duplicateCount} duplicate(s), found {conflictingCount} conflicting duplicate(s).");
+    }
+
+    private static ReferenceSource CloneReference(ReferenceSource reference)
+    {
+        return new ReferenceSource
+        {
+            Key = reference.Key,
+            Type = reference.Type,
+            Fields = new Dictionary<string, string>(reference.Fields)
+        };
+    }
+
+    private static bool HasSameReferenceDefinition(ReferenceSource left, ReferenceSource right)
+    {
+        if (!string.Equals(left.Type, right.Type, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (left.Fields.Count != right.Fields.Count)
+        {
+            return false;
+        }
+
+        var rightFields = new Dictionary<string, string>(right.Fields, StringComparer.OrdinalIgnoreCase);
+        foreach (var (fieldName, fieldValue) in left.Fields)
+        {
+            if (!rightFields.TryGetValue(fieldName, out var rightValue))
+            {
+                return false;
+            }
+
+            if (!string.Equals(fieldValue, rightValue, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     public void RemoveLastHeading()
@@ -645,7 +709,7 @@ public class DocxContent : IDocxContent
     /// </summary>
     private void WriteBibliographySources(WordprocessingDocument document)
     {
-        if (_references == null || _references.Count == 0) return;
+        if (_referencesByKey.Count == 0) return;
 
         var mainPart = document.MainDocumentPart;
         if (mainPart == null) return;
@@ -678,15 +742,32 @@ public class DocxContent : IDocxContent
         if (existingBibPart != null && existingDoc?.Root != null)
         {
             // Merge new sources into the existing bibliography part
-            foreach (var reference in _references)
+            var existingTags = existingDoc.Root
+                .Elements(bNs + "Source")
+                .Select(source => source.Element(bNs + "Tag")?.Value)
+                .Where(tag => !string.IsNullOrWhiteSpace(tag))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+            int mergedCount = 0;
+            int skippedExistingCount = 0;
+
+            foreach (var reference in _referencesByKey.Values)
             {
+                if (existingTags.Contains(reference.Key))
+                {
+                    skippedExistingCount++;
+                    continue;
+                }
+
                 existingDoc.Root.Add(CreateSourceXElement(reference, bNs));
+                existingTags.Add(reference.Key);
+                mergedCount++;
             }
 
             using var writeStream = existingBibPart.GetStream(FileMode.Create);
             existingDoc.Save(writeStream);
 
-            Console.WriteLine($"[INFO] Merged {_references.Count} bibliography source(s) into existing bibliography data.");
+            Console.WriteLine($"[INFO] Merged {mergedCount} bibliography source(s) into existing bibliography data; skipped {skippedExistingCount} source(s) already present in template.");
         }
         else
         {
@@ -696,7 +777,7 @@ public class DocxContent : IDocxContent
                 new XAttribute("SelectedStyle", "\\APASixthEditionOfficeOnline.xsl"),
                 new XAttribute("StyleName", "APA"),
                 new XAttribute("Version", "6"),
-                _references.Select(r => CreateSourceXElement(r, bNs))
+                _referencesByKey.Values.Select(r => CreateSourceXElement(r, bNs))
             );
 
             var xmlDoc = new XDocument(
@@ -723,7 +804,7 @@ public class DocxContent : IDocxContent
             );
             propsPart.DataStoreItem.Save();
 
-            Console.WriteLine($"[INFO] Created new bibliography data with {_references.Count} source(s).");
+            Console.WriteLine($"[INFO] Created new bibliography data with {_referencesByKey.Count} unique source(s).");
         }
     }
 
@@ -1325,7 +1406,7 @@ public class DocxContent : IDocxContent
         _localListId = 0;
         _figureSequenceNumber = 0;
         _tableSequenceNumber = 0;
-        _references = null;
+        _referencesByKey.Clear();
         FinalizeCurrentContext();
     }
 }

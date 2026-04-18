@@ -239,6 +239,13 @@ Sources are defined in a fenced code block with `references` as the language ide
 
 The `references` block does not produce visible output in the DOCX body. The sources are stored in the document's bibliography data (CustomXmlPart), and the template's existing bibliography/references section renders them. Inline `[@key]` citations are replaced with Word CITATION fields that link to these sources.
 
+You can include multiple `references` blocks in the same Markdown file. The converter merges all sources across these blocks.
+
+If the same `key` appears more than once:
+
+- If the source details are identical, duplicates are ignored.
+- If the source details differ, the first definition is kept and a warning is logged.
+
 ### Inline citations
 
 Use `[@key]` to cite a source inline. Multiple citations can be combined with semicolons.

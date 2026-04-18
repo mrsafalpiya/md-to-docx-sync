@@ -564,7 +564,7 @@ void ProcessMarkdownNode(MarkdownObject node)
 
         case FencedCodeBlock fencedCodeBlock:
             // Check if this is a references block
-            if (fencedCodeBlock.Info?.Trim() == "references")
+            if (string.Equals(fencedCodeBlock.Info?.Trim(), "references", StringComparison.OrdinalIgnoreCase))
             {
 
                 var yamlContent = string.Join("\n", fencedCodeBlock.Lines);
