@@ -27,6 +27,8 @@ public class DocxContent : IDocxContent
     private TableRow? _currentTableRow = null;
     private TableCell? _currentTableCell = null;
     private int _currentTableRowIndex = 0;
+    private Hyperlink? _currentHyperlink = null;
+    private int _bookmarkIdCounter = 1;
 
     // Collected content
     private readonly List<OpenXmlElement> _elements = new();
@@ -59,7 +61,7 @@ public class DocxContent : IDocxContent
     /// </summary>
     private static string GetHeadingStyleId(int level) => $"Heading{level}";
 
-    public void NewHeading(int level)
+    public void NewHeading(int level, string? bookmarkName = null)
     {
         FinalizeCurrentContext();
 
@@ -70,6 +72,12 @@ public class DocxContent : IDocxContent
                 new ParagraphStyleId() { Val = GetHeadingStyleId(_currentHeadingLevel) }
             )
         );
+
+        if (!string.IsNullOrEmpty(bookmarkName))
+        {
+            AddBookmarkToParagraph(_currentParagraph, bookmarkName);
+        }
+
         _elements.Add(_currentParagraph);
     }
 
@@ -128,6 +136,11 @@ public class DocxContent : IDocxContent
             runProperties.Append(new Strike());
         }
 
+        if (_currentHyperlink != null)
+        {
+            runProperties.Append(new RunStyle() { Val = "Hyperlink" });
+        }
+
         // // For inline code (literal), apply monospace font styling
         // // but keep the same paragraph style (Body1, Body2, etc.)
         // if (isLiteral)
@@ -148,13 +161,13 @@ public class DocxContent : IDocxContent
             }
 
             run.Append(new Text(lines[i]) { Space = SpaceProcessingModeValues.Preserve });
-            _currentParagraph!.Append(run);
+            AppendToCurrentContainer(run);
 
             // Add line break between lines (not after the last one)
             if (i < lines.Length - 1)
             {
                 var breakRun = new Run(new Break());
-                _currentParagraph.Append(breakRun);
+                AppendToCurrentContainer(breakRun);
             }
         }
     }
@@ -162,7 +175,30 @@ public class DocxContent : IDocxContent
     public void AddLineBreak()
     {
         EnsureCurrentParagraph();
-        _currentParagraph!.Append(new Run(new Break()));
+        AppendToCurrentContainer(new Run(new Break()));
+    }
+
+    public void BeginInternalHyperlink(string bookmarkName)
+    {
+        EnsureCurrentParagraph();
+
+        if (_currentHyperlink != null)
+        {
+            throw new InvalidOperationException("Nested hyperlinks are not supported.");
+        }
+
+        _currentHyperlink = new Hyperlink()
+        {
+            Anchor = bookmarkName,
+            History = OnOffValue.FromBoolean(true)
+        };
+
+        _currentParagraph!.Append(_currentHyperlink);
+    }
+
+    public void EndHyperlink()
+    {
+        _currentHyperlink = null;
     }
 
     public void AddPageBreak()
@@ -191,7 +227,7 @@ public class DocxContent : IDocxContent
         _localListId++;
     }
 
-    public void NewListItem(int level = 0)
+    public void NewListItem(int level = 0, string? bookmarkName = null)
     {
         if (_currentListType == null)
         {
@@ -221,11 +257,17 @@ public class DocxContent : IDocxContent
         ));
 
         _currentParagraph = new Paragraph(paragraphProperties);
+
+        if (!string.IsNullOrEmpty(bookmarkName))
+        {
+            AddBookmarkToParagraph(_currentParagraph, bookmarkName);
+        }
+
         _elements.Add(_currentParagraph);
         _listItemIndex++;
     }
 
-    public void NewTable(string? caption = null, int? widthPercent = null)
+    public void NewTable(string? caption = null, int? widthPercent = null, string? bookmarkName = null)
     {
         FinalizeCurrentContext();
 
@@ -242,6 +284,11 @@ public class DocxContent : IDocxContent
                     new Justification() { Val = JustificationValues.Center }
                 )
             );
+
+            if (!string.IsNullOrEmpty(bookmarkName))
+            {
+                AddBookmarkToParagraph(captionParagraph, bookmarkName);
+            }
 
             // Add "Table " text
             var tableRun = new Run(new Text("Table ") { Space = SpaceProcessingModeValues.Preserve });
@@ -369,7 +416,7 @@ public class DocxContent : IDocxContent
         _currentTableCell.Append(_currentParagraph);
     }
 
-    public void AddImage(string imagePath, string? caption = null, double? widthInches = null)
+    public void AddImage(string imagePath, string? caption = null, double? widthInches = null, string? bookmarkName = null)
     {
         FinalizeCurrentContext();
 
@@ -406,6 +453,11 @@ public class DocxContent : IDocxContent
                     new Justification() { Val = JustificationValues.Center }
                 )
             );
+
+            if (!string.IsNullOrEmpty(bookmarkName))
+            {
+                AddBookmarkToParagraph(captionParagraph, bookmarkName);
+            }
 
             // Add "Figure " text
             var figureRun = new Run(new Text("Figure ") { Space = SpaceProcessingModeValues.Preserve });
@@ -455,23 +507,23 @@ public class DocxContent : IDocxContent
                 : $" CITATION {keys[i]} \\l 1033  \\m {keys[0]}";
 
             // CITATION field begin
-            _currentParagraph!.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.Begin }));
+            AppendToCurrentContainer(new Run(new FieldChar() { FieldCharType = FieldCharValues.Begin }));
 
             // CITATION field code
-            _currentParagraph.Append(new Run(
+            AppendToCurrentContainer(new Run(
                 new FieldCode(fieldCode) { Space = SpaceProcessingModeValues.Preserve }));
 
             // CITATION field separator
-            _currentParagraph.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.Separate }));
+            AppendToCurrentContainer(new Run(new FieldChar() { FieldCharType = FieldCharValues.Separate }));
 
             // Placeholder result text with NoProof (Word will replace this when fields are updated)
             var resultRun = new Run();
             resultRun.Append(new RunProperties(new NoProof()));
             resultRun.Append(new Text($"[{keys[i]}]") { Space = SpaceProcessingModeValues.Preserve });
-            _currentParagraph.Append(resultRun);
+            AppendToCurrentContainer(resultRun);
 
             // CITATION field end
-            _currentParagraph.Append(new Run(new FieldChar() { FieldCharType = FieldCharValues.End }));
+            AppendToCurrentContainer(new Run(new FieldChar() { FieldCharType = FieldCharValues.End }));
         }
     }
 
@@ -1388,6 +1440,45 @@ public class DocxContent : IDocxContent
         return level;
     }
 
+    private void AddBookmarkToParagraph(Paragraph paragraph, string bookmarkName)
+    {
+        var bookmarkIdValue = _bookmarkIdCounter.ToString();
+        _bookmarkIdCounter++;
+
+        var bookmarkStart = new BookmarkStart()
+        {
+            Name = bookmarkName,
+            Id = bookmarkIdValue
+        };
+
+        var bookmarkEnd = new BookmarkEnd()
+        {
+            Id = bookmarkIdValue
+        };
+
+        if (paragraph.ParagraphProperties != null)
+        {
+            paragraph.InsertAfter(bookmarkStart, paragraph.ParagraphProperties);
+        }
+        else
+        {
+            paragraph.PrependChild(bookmarkStart);
+        }
+
+        paragraph.Append(bookmarkEnd);
+    }
+
+    private void AppendToCurrentContainer(Run run)
+    {
+        if (_currentHyperlink != null)
+        {
+            _currentHyperlink.Append(run);
+            return;
+        }
+
+        _currentParagraph!.Append(run);
+    }
+
     /// <summary>
     /// Ensures there's a current paragraph to add content to.
     /// </summary>
@@ -1404,6 +1495,7 @@ public class DocxContent : IDocxContent
     /// </summary>
     private void FinalizeCurrentContext()
     {
+        _currentHyperlink = null;
         _currentParagraph = null;
         _currentListType = null;
         _currentTable = null;
@@ -1423,6 +1515,7 @@ public class DocxContent : IDocxContent
         _localListId = 0;
         _figureSequenceNumber = 0;
         _tableSequenceNumber = 0;
+        _bookmarkIdCounter = 1;
         _referencesByKey.Clear();
         FinalizeCurrentContext();
     }

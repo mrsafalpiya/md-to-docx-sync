@@ -8,7 +8,7 @@ namespace md_to_docx_sync.Interfaces;
 
 public interface IDocxContent
 {
-    void NewHeading(int level);
+    void NewHeading(int level, string? bookmarkName = null);
     void NewParagraph(bool isLiteral = false);
 
     // Text
@@ -18,7 +18,7 @@ public interface IDocxContent
 
     // List
     void NewList(DocxListType type);
-    void NewListItem(int level = 0);
+    void NewListItem(int level = 0, string? bookmarkName = null);
 
     // Table
     /// <summary>
@@ -26,7 +26,8 @@ public interface IDocxContent
     /// </summary>
     /// <param name="caption">Optional caption for the table.</param>
     /// <param name="widthPercent">Optional width as percentage (1-100). Defaults to 100 (full width).</param>
-    void NewTable(string? caption = null, int? widthPercent = null);
+    /// <param name="bookmarkName">Optional bookmark target applied to the caption paragraph.</param>
+    void NewTable(string? caption = null, int? widthPercent = null, string? bookmarkName = null);
     void NewRow();
     void NewCell(int columnSpan = 1, bool verticalMergeStart = false, bool verticalMergeContinue = false, JustificationValues? alignment = null);
 
@@ -37,7 +38,20 @@ public interface IDocxContent
     /// <param name="imagePath">Path to the image file.</param>
     /// <param name="caption">Optional caption for the image.</param>
     /// <param name="widthInches">Optional width in inches. If not provided, uses the original image width. Height is auto-calculated to maintain aspect ratio.</param>
-    void AddImage(string imagePath, string? caption = null, double? widthInches = null);
+    /// <param name="bookmarkName">Optional bookmark target applied to the caption paragraph.</param>
+    void AddImage(string imagePath, string? caption = null, double? widthInches = null, string? bookmarkName = null);
+
+    // Internal hyperlinks
+    /// <summary>
+    /// Starts an internal hyperlink that targets a bookmark in the document.
+    /// Text added after this call is wrapped in the hyperlink until EndHyperlink is called.
+    /// </summary>
+    void BeginInternalHyperlink(string bookmarkName);
+
+    /// <summary>
+    /// Ends the current hyperlink scope if one is active.
+    /// </summary>
+    void EndHyperlink();
 
     // References
     /// <summary>

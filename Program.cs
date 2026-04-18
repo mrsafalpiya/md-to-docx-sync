@@ -2,6 +2,7 @@
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Markdig;
+using Markdig.Renderers.Html;
 using Markdig.Syntax;
 using md_to_docx_sync.Enums;
 using md_to_docx_sync.Models;
@@ -56,18 +57,186 @@ var markdownContent = Markdown.Parse(rawMarkdown, pipeline);
 // Create DocxContent from markdown
 DocxContent docxContent = new();
 
-// Helper to parse caption with optional width (e.g., "Caption text |> 400")
-(string caption, int? width) ParseCaptionWithWidth(string? rawCaption)
+const string targetIdPattern = "^[A-Za-z][A-Za-z0-9:_-]*$";
+var definedCrossReferenceTargets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+var referencedCrossReferenceTargets = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+var crossReferenceErrors = new List<string>();
+
+bool IsValidTargetId(string targetId)
+{
+    return Regex.IsMatch(targetId, targetIdPattern);
+}
+
+void AddCrossReferenceError(string message)
+{
+    crossReferenceErrors.Add(message);
+}
+
+void RegisterCrossReferenceTarget(string targetId, string location)
+{
+    if (!IsValidTargetId(targetId))
+    {
+        AddCrossReferenceError($"Invalid target ID '{targetId}' at {location}. Allowed pattern: {targetIdPattern}");
+        return;
+    }
+
+    if (definedCrossReferenceTargets.TryGetValue(targetId, out string? existingLocation))
+    {
+        AddCrossReferenceError($"Duplicate target ID '{targetId}' at {location}. Already defined at {existingLocation}.");
+        return;
+    }
+
+    definedCrossReferenceTargets[targetId] = location;
+}
+
+void RegisterCrossReferenceReference(string targetId, string location)
+{
+    if (string.IsNullOrWhiteSpace(targetId))
+    {
+        AddCrossReferenceError($"Empty internal cross-reference target at {location}. Use [text](#target-id).");
+        return;
+    }
+
+    if (!IsValidTargetId(targetId))
+    {
+        AddCrossReferenceError($"Invalid referenced target ID '{targetId}' at {location}. Allowed pattern: {targetIdPattern}");
+        return;
+    }
+
+    if (!referencedCrossReferenceTargets.TryGetValue(targetId, out var locations))
+    {
+        locations = new List<string>();
+        referencedCrossReferenceTargets[targetId] = locations;
+    }
+
+    locations.Add(location);
+}
+
+void ValidateCrossReferencesOrThrow()
+{
+    foreach (var (targetId, locations) in referencedCrossReferenceTargets)
+    {
+        if (definedCrossReferenceTargets.ContainsKey(targetId))
+        {
+            continue;
+        }
+
+        string joinedLocations = string.Join("; ", locations.Distinct(StringComparer.Ordinal));
+        AddCrossReferenceError($"Unresolved cross-reference target '{targetId}' referenced at {joinedLocations}.");
+    }
+
+    if (crossReferenceErrors.Count == 0)
+    {
+        return;
+    }
+
+    foreach (string error in crossReferenceErrors)
+    {
+        Console.Error.WriteLine($"[ERROR] {error}");
+    }
+
+    throw new InvalidOperationException("Cross-reference validation failed.");
+}
+
+(bool markerFound, string textWithoutMarker, string? targetId) ParseTrailingTargetMarker(string text, string location)
+{
+    string working = text.TrimEnd();
+    int markerStart = working.LastIndexOf("{#", StringComparison.Ordinal);
+
+    if (markerStart < 0)
+    {
+        return (false, working, null);
+    }
+
+    if (!working.EndsWith("}", StringComparison.Ordinal))
+    {
+        AddCrossReferenceError($"Malformed target marker in {location}: '{working}'. Expected trailing '{{#id}}'.");
+        return (true, working, null);
+    }
+
+    if (markerStart == 0 || !char.IsWhiteSpace(working[markerStart - 1]))
+    {
+        AddCrossReferenceError($"Malformed target marker in {location}: '{working}'. Marker must be preceded by whitespace.");
+        return (true, working, null);
+    }
+
+    string targetIdCandidate = working.Substring(markerStart + 2, working.Length - markerStart - 3).Trim();
+    string visibleText = working.Substring(0, markerStart).TrimEnd();
+
+    if (string.IsNullOrWhiteSpace(targetIdCandidate))
+    {
+        AddCrossReferenceError($"Malformed target marker in {location}: '{working}'. Target ID cannot be empty.");
+        return (true, visibleText, null);
+    }
+
+    if (!IsValidTargetId(targetIdCandidate))
+    {
+        AddCrossReferenceError($"Invalid target ID '{targetIdCandidate}' in {location}. Allowed pattern: {targetIdPattern}");
+        return (true, visibleText, null);
+    }
+
+    return (true, visibleText, targetIdCandidate);
+}
+
+string? ConsumeTrailingTargetMarkerFromInline(Markdig.Syntax.Inlines.ContainerInline? container, string location)
+{
+    if (container == null)
+    {
+        return null;
+    }
+
+    var lastInline = container.LastChild;
+    while (lastInline is Markdig.Syntax.Inlines.LineBreakInline)
+    {
+        lastInline = lastInline.PreviousSibling;
+    }
+
+    if (lastInline is Markdig.Syntax.Inlines.LiteralInline literalInline)
+    {
+        var parseResult = ParseTrailingTargetMarker(literalInline.Content.ToString(), location);
+        if (!parseResult.markerFound)
+        {
+            return null;
+        }
+
+        literalInline.Content = new Markdig.Helpers.StringSlice(parseResult.textWithoutMarker);
+        return parseResult.targetId;
+    }
+
+    // Keep behavior explicit: marker stripping is only supported when the marker is in trailing literal text.
+    var plainText = GetPlainText(container);
+    var fallbackParseResult = ParseTrailingTargetMarker(plainText, location);
+    if (fallbackParseResult.markerFound && fallbackParseResult.targetId != null)
+    {
+        AddCrossReferenceError($"Target marker in {location} must be plain trailing text (for example: ... {{#{fallbackParseResult.targetId}}}).");
+    }
+
+    return null;
+}
+
+// Helper to parse caption with optional width and optional target marker (e.g., "Caption text {#fig-id} |> 400")
+(string caption, int? width, string? targetId) ParseCaptionMetadata(string? rawCaption, string location)
 {
     if (string.IsNullOrEmpty(rawCaption))
-        return (string.Empty, null);
+        return (string.Empty, null, null);
 
-    var match = Regex.Match(rawCaption, @"^(.+?)\s*\|>\s*(\d+)\s*$");
-    if (match.Success)
+    string working = rawCaption.Trim();
+    int? width = null;
+
+    var widthMatch = Regex.Match(working, @"^(.+?)\s*\|>\s*(\d+)\s*$");
+    if (widthMatch.Success)
     {
-        return (match.Groups[1].Value.Trim(), int.Parse(match.Groups[2].Value));
+        working = widthMatch.Groups[1].Value.TrimEnd();
+        width = int.Parse(widthMatch.Groups[2].Value);
     }
-    return (rawCaption.Trim(), null);
+
+    var markerResult = ParseTrailingTargetMarker(working, location);
+    if (markerResult.markerFound)
+    {
+        working = markerResult.textWithoutMarker;
+    }
+
+    return (working.Trim(), width, markerResult.targetId);
 }
 
 // Helper to get plain text from inline elements (for captions)
@@ -83,6 +252,17 @@ string GetPlainText(Markdig.Syntax.Inlines.ContainerInline? container)
             sb.Append(GetPlainText(nested));
     }
     return sb.ToString();
+}
+
+string? GetTargetIdFromAttributes(MarkdownObject markdownObject)
+{
+    var attributes = markdownObject.TryGetAttributes();
+    if (attributes == null || string.IsNullOrWhiteSpace(attributes.Id))
+    {
+        return null;
+    }
+
+    return attributes.Id;
 }
 
 // Helper to parse references YAML block into ReferenceSource list
@@ -199,6 +379,33 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
         {
             docxContent.AddText(codeInline.Content, isBold, isItalic, isUnderline, isStrikethrough, isLiteral: true);
         }
+        else if (inline is Markdig.Syntax.Inlines.LinkInline linkInline && !linkInline.IsImage)
+        {
+            var linkTarget = linkInline.Url;
+            if (!string.IsNullOrEmpty(linkTarget) && linkTarget.StartsWith("#", StringComparison.Ordinal))
+            {
+                string targetId = linkTarget.Substring(1);
+                RegisterCrossReferenceReference(targetId, $"link '{linkTarget}'");
+
+                if (IsValidTargetId(targetId))
+                {
+                    docxContent.BeginInternalHyperlink(targetId);
+                    try
+                    {
+                        ProcessInlines(linkInline, isBold, isItalic, isUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+                    }
+                    finally
+                    {
+                        docxContent.EndHyperlink();
+                    }
+
+                    continue;
+                }
+            }
+
+            // Non-anchor links are rendered as plain text (link text only) to preserve existing behavior.
+            ProcessInlines(linkInline, isBold, isItalic, isUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+        }
         else if (inline is Markdig.Extensions.SmartyPants.SmartyPant smartyPant)
         {
             string smartText = smartyPant.Type switch
@@ -295,6 +502,33 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
         {
             docxContent.AddText(codeInline.Content, isBold, isItalic, currentUnderline, isStrikethrough, isLiteral: true);
         }
+        else if (inline is Markdig.Syntax.Inlines.LinkInline linkInline && !linkInline.IsImage)
+        {
+            var linkTarget = linkInline.Url;
+            if (!string.IsNullOrEmpty(linkTarget) && linkTarget.StartsWith("#", StringComparison.Ordinal))
+            {
+                string targetId = linkTarget.Substring(1);
+                RegisterCrossReferenceReference(targetId, $"link '{linkTarget}'");
+
+                if (IsValidTargetId(targetId))
+                {
+                    docxContent.BeginInternalHyperlink(targetId);
+                    try
+                    {
+                        ProcessInlines(linkInline, isBold, isItalic, currentUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+                    }
+                    finally
+                    {
+                        docxContent.EndHyperlink();
+                    }
+
+                    continue;
+                }
+            }
+
+            // Non-anchor links are rendered as plain text (link text only) to preserve existing behavior.
+            ProcessInlines(linkInline, isBold, isItalic, currentUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+        }
         else if (inline is Markdig.Extensions.SmartyPants.SmartyPant smartyPant)
         {
             string smartText = smartyPant.Type switch
@@ -335,15 +569,27 @@ void ProcessListBlock(ListBlock listBlock, int nestingLevel = 0)
         docxContent.NewList(listType);
     }
 
+    int listItemNumber = 0;
     foreach (var item in listBlock)
     {
         if (item is ListItemBlock listItemBlock)
         {
+            listItemNumber++;
+
             foreach (var child in listItemBlock)
             {
                 if (child is ParagraphBlock paragraphBlock)
                 {
-                    docxContent.NewListItem(level: nestingLevel);
+                    string location = $"list item {listItemNumber} at level {nestingLevel + 1}";
+                    string? listItemTargetId = GetTargetIdFromAttributes(paragraphBlock)
+                        ?? GetTargetIdFromAttributes(listItemBlock)
+                        ?? ConsumeTrailingTargetMarkerFromInline(paragraphBlock.Inline, location);
+                    if (!string.IsNullOrEmpty(listItemTargetId))
+                    {
+                        RegisterCrossReferenceTarget(listItemTargetId, location);
+                    }
+
+                    docxContent.NewListItem(level: nestingLevel, bookmarkName: listItemTargetId);
                     ProcessInlinesWithUnderline(paragraphBlock.Inline);
                 }
                 else if (child is ListBlock nestedList)
@@ -438,7 +684,7 @@ void ProcessTableCellContent(Markdig.Extensions.Tables.TableCell tableCell)
     }
 }
 
-void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null, int? widthPercent = null)
+void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null, int? widthPercent = null, string? captionTargetId = null)
 {
     JustificationValues? GetColumnAlignment(int columnIndex)
     {
@@ -456,7 +702,7 @@ void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null,
         };
     }
 
-    docxContent.NewTable(caption, widthPercent);
+    docxContent.NewTable(caption, widthPercent, captionTargetId);
 
     // Tracks pending vertical merges per column index (remaining continuation rows).
     var activeVerticalMerges = new Dictionary<int, int>();
@@ -539,7 +785,15 @@ void ProcessMarkdownNode(MarkdownObject node)
     switch (node)
     {
         case HeadingBlock headingBlock:
-            docxContent.NewHeading(headingBlock.Level);
+            string? headingTargetId = GetTargetIdFromAttributes(headingBlock)
+                ?? ConsumeTrailingTargetMarkerFromInline(headingBlock.Inline, "heading");
+
+            if (!string.IsNullOrEmpty(headingTargetId))
+            {
+                RegisterCrossReferenceTarget(headingTargetId, "heading");
+            }
+
+            docxContent.NewHeading(headingBlock.Level, headingTargetId);
             ProcessInlinesWithUnderline(headingBlock.Inline);
             break;
 
@@ -669,6 +923,7 @@ void ProcessMarkdownNode(MarkdownObject node)
             // Figure can contain Table, ParagraphBlock (with image), and FigureCaption
             string? figureCaption = null;
             int? figureWidth = null;
+            string? figureTargetId = null;
 
             // First, find the caption to get width info
             foreach (var child in figure)
@@ -677,20 +932,32 @@ void ProcessMarkdownNode(MarkdownObject node)
                 {
                     // FigureCaption is a LeafBlock with Inline content
                     var rawCaption = GetPlainText(caption.Inline);
-                    (figureCaption, figureWidth) = ParseCaptionWithWidth(rawCaption);
+                    (figureCaption, figureWidth, figureTargetId) = ParseCaptionMetadata(rawCaption, "figure caption");
+                    figureTargetId ??= GetTargetIdFromAttributes(caption);
                 }
+            }
+
+            if (!string.IsNullOrEmpty(figureTargetId))
+            {
+                RegisterCrossReferenceTarget(figureTargetId, "figure/table caption");
             }
 
             // Now process the figure contents
             bool hasTable = false;
             bool hasImage = false;
+            bool captionTargetApplied = false;
 
             foreach (var child in figure)
             {
                 if (child is Markdig.Extensions.Tables.Table table)
                 {
                     hasTable = true;
-                    ProcessTable(table, figureCaption, figureWidth);
+                    string? bookmarkName = !captionTargetApplied ? figureTargetId : null;
+                    ProcessTable(table, figureCaption, figureWidth, bookmarkName);
+                    if (!string.IsNullOrEmpty(bookmarkName))
+                    {
+                        captionTargetApplied = true;
+                    }
                 }
                 else if (child is ParagraphBlock figParagraphBlock)
                 {
@@ -709,7 +976,12 @@ void ProcessMarkdownNode(MarkdownObject node)
 
                             // Convert width from pixels to inches (assuming 96 DPI)
                             double? widthInches = figureWidth.HasValue ? figureWidth.Value / 96.0 : null;
-                            docxContent.AddImage(imagePath ?? string.Empty, figureCaption, widthInches);
+                            string? bookmarkName = !captionTargetApplied ? figureTargetId : null;
+                            docxContent.AddImage(imagePath ?? string.Empty, figureCaption, widthInches, bookmarkName);
+                            if (!string.IsNullOrEmpty(bookmarkName))
+                            {
+                                captionTargetApplied = true;
+                            }
                         }
                     }
                 }
@@ -755,7 +1027,16 @@ void ProcessMarkdownNode(MarkdownObject node)
     }
 }
 
-ProcessMarkdownNode(markdownContent);
+try
+{
+    ProcessMarkdownNode(markdownContent);
+    ValidateCrossReferencesOrThrow();
+}
+catch (InvalidOperationException ex)
+{
+    Console.Error.WriteLine($"[ERROR] {ex.Message}");
+    return;
+}
 
 // Copy DOCX Template to Output File
 

@@ -2,9 +2,11 @@
 
 This document demonstrates a variety of Markdown features for testing conversion and syncing.
 
-## Overview
+## Overview {#overview}
 
 Contents within this "section explain purpose" and include 'lists and' inline 'formatting.
+
+Quick links: [Installation](#install), [Configuration table](#tbl-config-options), [Primary API endpoint](#api-get-items), and [sample image](#fig-sample-placeholder).
 
 - Unordered item one
   - Unordered item one-one
@@ -69,21 +71,23 @@ This text follows an empty paragraph.
 
 ---
 
-# Usage Examples
+# Usage Examples {#usage-examples}
 
 Another top-level section to show repeated headings and additional constructs.
 
-## Installation
+## Installation {#install}
 
 Instructions and lists for install.
 
-- Download package
+See [download step](#install-download) and [run installer step](#install-run).
+
+- Download package {#install-download}
 - Extract files
 
-1. Run installer
+1. Run installer {#install-run}
 2. Restart system
 
-### Configuration
+### Configuration {#configuration}
 
 Configuration options with a small table and inline emphasis.
 
@@ -93,17 +97,17 @@ Configuration options with a small table and inline emphasis.
 | theme | UI theme | light |
 | sync | Auto-sync | true |
 | level | Verbosity | 2 |
-^^^ Configuration options table |> 50
+^^^ Configuration options table {#tbl-config-options} |> 50
 
-### Image
+### Image {#image-examples}
 
 ^^^
 ![](./placeholder-500.png)
-^^^ Example placeholder 500x500 image |> 300
+^^^ Example placeholder 500x500 image {#fig-placeholder-square} |> 300
 
 ^^^
 ![](./placeholder-400-300.png)
-^^^ Example placeholder 400x300 image
+^^^ Example placeholder 400x300 image {#fig-placeholder-rect}
 
 #### Advanced (Level 4 repeat)
 
@@ -130,18 +134,20 @@ namespace Example
 
 ---
 
-# API Reference
+# API Reference {#api-reference}
 
 A repeated H1 to satisfy multiple entries requirement.
 
-## Endpoints
+## Endpoints {#api-endpoints}
 
 Short description plus lists and formatting.
 
-- GET /items — Retrieve items
+See [configuration section](#configuration) and [square image example](#fig-placeholder-square).
+
+- GET /items — Retrieve items {#api-get-items}
 - POST /items — Create item
 
-1. Authenticate
+1. Authenticate {#api-auth-step}
 2. Call endpoint
 
 ### Request Example
@@ -168,15 +174,15 @@ Explanation of typical responses.
 
 ---
 
-# Images
+# Images {#images-section}
 
 ^^^
 ![](./placeholder-500.png)
-^^^ Sample placeholder image |> 400
+^^^ Sample placeholder image {#fig-sample-placeholder} |> 400
 
 ---
 
-# Appendix
+# Appendix {#appendix}
 
 Final H1 section with mixed inline styles and another small table.
 
@@ -194,7 +200,7 @@ Final H1 section with mixed inline styles and another small table.
 | ---- | ---- |
 | foo | int |
 | bar | str |
-^^^ Small example table
+^^^ Small example table {#tbl-small-example}
 
 #### Final Codeblock
 

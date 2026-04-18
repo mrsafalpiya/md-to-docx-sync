@@ -76,6 +76,86 @@ The value (`50`) is a **percentage of page width** (1--100). If omitted, the tab
 
 ---
 
+## Cross-References
+
+The converter supports internal cross-references using standard Markdown anchor links:
+
+```markdown
+[Link text](#target-id)
+```
+
+Cross-reference targets are created with explicit trailing markers in the form ` {#target-id}`.
+
+### Supported target types
+
+- Headings
+- Figure captions
+- Table captions
+- Ordered list items
+- Unordered list items
+
+### Heading targets
+
+Append the marker at the end of the heading text:
+
+```markdown
+## Installation {#install}
+```
+
+### Figure and table targets
+
+Append the marker to the figure caption text. Width syntax can still be used:
+
+```markdown
+^^^
+![](./image.png)
+^^^ Deployment diagram {#fig-deploy} |> 320
+```
+
+```markdown
+^^^
+| Key | Value |
+| --- | ----- |
+| A   | B     |
+^^^ Configuration table {#tbl-config} |> 60
+```
+
+### List-item targets
+
+Append the marker to the end of a list item line:
+
+```markdown
+1. Install dependencies {#step-install}
+- Run smoke checks {#check-smoke}
+```
+
+### Referencing targets
+
+Use normal anchor links to reference any target:
+
+```markdown
+See [installation](#install), [configuration table](#tbl-config), and [smoke check](#check-smoke).
+```
+
+### Validation behavior (strict)
+
+Cross-reference validation is strict and fails conversion when:
+
+- A referenced target does not exist.
+- A target ID is duplicated.
+- A target marker is malformed.
+- A target ID contains invalid characters.
+
+Allowed target ID pattern:
+
+```text
+^[A-Za-z][A-Za-z0-9:_-]*$
+```
+
+IDs are matched case-insensitively.
+
+---
+
 ## Page Break (`:::pagebreak`)
 
 Use a Markdig custom container with `pagebreak` info to insert a DOCX page break.
@@ -566,6 +646,8 @@ Horizontal rules (`---`) are recognized but **produce no visible output** in the
 | Empty Paragraph | `&nbsp;` | Inserts a non-empty blank line |
 | Image width | `^^^ Caption \|> 300` | Pixels, converted at 96 DPI |
 | Table width | `^^^ Caption \|> 50` | Percentage of page width |
+| Target marker | `Text {#target-id}` | Defines linkable target |
+| Internal cross-reference | `[Text](#target-id)` | Links to heading/caption/list-item target |
 | Inline citation | `[@key]` | Word CITATION field |
 | Multiple citations | `[@key1; @key2]` | Semicolon-separated |
 | References block | `` ```references `` | YAML source definitions |
