@@ -87,6 +87,21 @@ public class DocxContent : IDocxContent
         _elements.Add(_currentParagraph);
     }
 
+    private static Paragraph CreateTableSpacerParagraph()
+    {
+        return new Paragraph(
+            new ParagraphProperties(
+                new ParagraphStyleId() { Val = "Normal" },
+                new SpacingBetweenLines()
+                {
+                    After = "0",
+                    Line = "360",
+                    LineRule = LineSpacingRuleValues.Auto
+                }
+            )
+        );
+    }
+
     public void AddText(string text, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false, bool isLiteral = false)
     {
         EnsureCurrentParagraph();
@@ -287,6 +302,8 @@ public class DocxContent : IDocxContent
 
         _currentTable = new Table(tableProperties);
         _elements.Add(_currentTable);
+        // Add a spacer paragraph to keep separation between the table and following block content.
+        _elements.Add(CreateTableSpacerParagraph());
         _currentTableRowIndex = 0;
     }
 
