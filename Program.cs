@@ -335,6 +335,16 @@ void AddTextWithCitations(string text, bool isBold, bool isItalic, bool isUnderl
     }
 }
 
+bool IsExternalHyperlinkTarget(string? linkTarget)
+{
+    if (string.IsNullOrWhiteSpace(linkTarget))
+    {
+        return false;
+    }
+
+    return Uri.TryCreate(linkTarget, UriKind.Absolute, out _);
+}
+
 // Process inline content with formatting
 void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBold = false, bool isItalic = false, bool isUnderline = false, bool isStrikethrough = false,
     bool allowBold = true, bool allowItalic = true, bool allowUnderline = true, bool allowStrikethrough = true)
@@ -401,6 +411,21 @@ void ProcessInlines(Markdig.Syntax.Inlines.ContainerInline? container, bool isBo
 
                     continue;
                 }
+            }
+
+            if (IsExternalHyperlinkTarget(linkTarget))
+            {
+                docxContent.BeginExternalHyperlink(linkTarget!);
+                try
+                {
+                    ProcessInlines(linkInline, isBold, isItalic, isUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+                }
+                finally
+                {
+                    docxContent.EndHyperlink();
+                }
+
+                continue;
             }
 
             // Non-anchor links are rendered as plain text (link text only) to preserve existing behavior.
@@ -524,6 +549,21 @@ void ProcessInlinesWithUnderline(Markdig.Syntax.Inlines.ContainerInline? contain
 
                     continue;
                 }
+            }
+
+            if (IsExternalHyperlinkTarget(linkTarget))
+            {
+                docxContent.BeginExternalHyperlink(linkTarget!);
+                try
+                {
+                    ProcessInlines(linkInline, isBold, isItalic, currentUnderline, isStrikethrough, allowBold, allowItalic, allowUnderline, allowStrikethrough);
+                }
+                finally
+                {
+                    docxContent.EndHyperlink();
+                }
+
+                continue;
             }
 
             // Non-anchor links are rendered as plain text (link text only) to preserve existing behavior.

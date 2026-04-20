@@ -29,6 +29,8 @@ public class DocxContent : IDocxContent
     private int _currentTableRowIndex = 0;
     private Hyperlink? _currentHyperlink = null;
     private int _bookmarkIdCounter = 1;
+    private int _externalHyperlinkCounter = 1;
+    private readonly Dictionary<string, string> _pendingExternalHyperlinks = new(StringComparer.Ordinal);
 
     // Collected content
     private readonly List<OpenXmlElement> _elements = new();
@@ -190,6 +192,33 @@ public class DocxContent : IDocxContent
         _currentHyperlink = new Hyperlink()
         {
             Anchor = bookmarkName,
+            History = OnOffValue.FromBoolean(true)
+        };
+
+        _currentParagraph!.Append(_currentHyperlink);
+    }
+
+    public void BeginExternalHyperlink(string hyperlinkTarget)
+    {
+        EnsureCurrentParagraph();
+
+        if (_currentHyperlink != null)
+        {
+            throw new InvalidOperationException("Nested hyperlinks are not supported.");
+        }
+
+        if (string.IsNullOrWhiteSpace(hyperlinkTarget))
+        {
+            throw new ArgumentException("Hyperlink target cannot be empty.", nameof(hyperlinkTarget));
+        }
+
+        string placeholderRelationshipId = $"extLink{_externalHyperlinkCounter}";
+        _externalHyperlinkCounter++;
+        _pendingExternalHyperlinks[placeholderRelationshipId] = hyperlinkTarget;
+
+        _currentHyperlink = new Hyperlink()
+        {
+            Id = placeholderRelationshipId,
             History = OnOffValue.FromBoolean(true)
         };
 
@@ -624,6 +653,12 @@ public class DocxContent : IDocxContent
             throw new InvalidOperationException("Document does not have a valid body.");
         }
 
+        var mainPart = document.MainDocumentPart;
+        if (mainPart == null)
+        {
+            throw new InvalidOperationException("Document does not have a valid main document part.");
+        }
+
         // Enable automatic field updates when the document is opened
         // This ensures SEQ fields for figures and tables are updated correctly
         EnableUpdateFieldsOnOpen(document);
@@ -643,6 +678,7 @@ public class DocxContent : IDocxContent
 
         // Clone elements and remap numbering IDs / process image placeholders
         var previousElement = insertAfterElement;
+        var relationshipIdByTarget = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var element in _elements)
         {
             var clonedElement = element.CloneNode(true);
@@ -672,8 +708,47 @@ public class DocxContent : IDocxContent
                 }
             }
 
+            ResolveExternalHyperlinks(clonedElement, mainPart, relationshipIdByTarget);
+
             body.InsertAfter(clonedElement, previousElement);
             previousElement = previousElement.NextSibling() ?? previousElement;
+        }
+    }
+
+    private void ResolveExternalHyperlinks(OpenXmlElement element, MainDocumentPart mainPart, Dictionary<string, string> relationshipIdByTarget)
+    {
+        foreach (var hyperlink in element.Descendants<Hyperlink>())
+        {
+            string? placeholderRelationshipId = hyperlink.Id?.Value;
+            if (string.IsNullOrEmpty(placeholderRelationshipId))
+            {
+                continue;
+            }
+
+            if (!_pendingExternalHyperlinks.TryGetValue(placeholderRelationshipId, out string? hyperlinkTarget))
+            {
+                continue;
+            }
+
+            if (!relationshipIdByTarget.TryGetValue(hyperlinkTarget, out string? actualRelationshipId))
+            {
+                Uri hyperlinkUri;
+                if (!Uri.TryCreate(hyperlinkTarget, UriKind.Absolute, out hyperlinkUri!))
+                {
+                    if (!Uri.TryCreate(hyperlinkTarget, UriKind.Relative, out hyperlinkUri!))
+                    {
+                        Console.WriteLine($"[WARNING] Skipping invalid hyperlink target '{hyperlinkTarget}'.");
+                        hyperlink.Id = null;
+                        continue;
+                    }
+                }
+
+                var relationship = mainPart.AddHyperlinkRelationship(hyperlinkUri, true);
+                actualRelationshipId = relationship.Id;
+                relationshipIdByTarget[hyperlinkTarget] = actualRelationshipId;
+            }
+
+            hyperlink.Id = actualRelationshipId;
         }
     }
 
@@ -1516,6 +1591,8 @@ public class DocxContent : IDocxContent
         _figureSequenceNumber = 0;
         _tableSequenceNumber = 0;
         _bookmarkIdCounter = 1;
+        _externalHyperlinkCounter = 1;
+        _pendingExternalHyperlinks.Clear();
         _referencesByKey.Clear();
         FinalizeCurrentContext();
     }

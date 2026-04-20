@@ -49,6 +49,12 @@ public interface IDocxContent
     void BeginInternalHyperlink(string bookmarkName);
 
     /// <summary>
+    /// Starts an external hyperlink that targets a URL.
+    /// Text added after this call is wrapped in the hyperlink until EndHyperlink is called.
+    /// </summary>
+    void BeginExternalHyperlink(string hyperlinkTarget);
+
+    /// <summary>
     /// Ends the current hyperlink scope if one is active.
     /// </summary>
     void EndHyperlink();
