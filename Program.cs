@@ -265,6 +265,15 @@ string? GetTargetIdFromAttributes(MarkdownObject markdownObject)
     return attributes.Id;
 }
 
+void WarnContentOutsideFigureBlock(string contentType, MarkdownObject markdownObject)
+{
+    string lineText = markdownObject.Line >= 0
+        ? (markdownObject.Line + 1).ToString()
+        : "unknown";
+
+    Console.WriteLine($"[WARNING] {contentType} is used without figure block (^^^) at line {lineText}.");
+}
+
 // Helper to parse references YAML block into ReferenceSource list
 List<ReferenceSource> ParseReferencesYaml(string yamlContent)
 {
@@ -840,9 +849,11 @@ void ProcessMarkdownNode(MarkdownObject node)
         case ParagraphBlock paragraphBlock:
             // Check if this paragraph contains only an image link
             var firstInline = paragraphBlock.Inline?.FirstChild;
-            if (firstInline is Markdig.Syntax.Inlines.LinkInline { IsImage: true } imageLink &&
+            if (firstInline is Markdig.Syntax.Inlines.LinkInline { IsImage: true } &&
                 paragraphBlock.Inline?.LastChild == firstInline)
             {
+                WarnContentOutsideFigureBlock("Image", paragraphBlock);
+
                 // This is a standalone image paragraph - it will be handled by the Figure container
                 // Skip processing here as it's handled by the Figure case
                 break;
@@ -1044,6 +1055,7 @@ void ProcessMarkdownNode(MarkdownObject node)
 
         case Markdig.Extensions.Tables.Table table:
             // Standalone table (not in a figure)
+            WarnContentOutsideFigureBlock("Table", table);
             ProcessTable(table);
             break;
 
