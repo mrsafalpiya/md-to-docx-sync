@@ -1,4 +1,5 @@
 ﻿using System.Text.RegularExpressions;
+using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using Markdig;
@@ -56,6 +57,9 @@ var markdownContent = Markdown.Parse(rawMarkdown, pipeline);
 
 // Create DocxContent from markdown
 DocxContent docxContent = new();
+DocxContent mainDocxContent = docxContent;
+DocxContent appendixDocxContent = new();
+List<Block> appendixBlocks = new();
 
 const string targetIdPattern = "^[A-Za-z][A-Za-z0-9:_-]*$";
 var definedCrossReferenceTargets = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -866,7 +870,7 @@ string GetNormalizedTopLevelHeadingText(HeadingBlock headingBlock)
     return null;
 }
 
-void ProcessMarkdownDocumentWithAppendixRelocation(MarkdownDocument document)
+List<Block> ProcessMarkdownDocumentAndExtractAppendix(MarkdownDocument document)
 {
     var topLevelBlocks = document.Cast<Block>().ToList();
     var appendixSectionRange = FindTopLevelSectionRange(topLevelBlocks, "Appendix");
@@ -874,47 +878,80 @@ void ProcessMarkdownDocumentWithAppendixRelocation(MarkdownDocument document)
     if (!appendixSectionRange.HasValue)
     {
         ProcessMarkdownNode(document);
-        return;
+        return new List<Block>();
     }
 
     int appendixStart = appendixSectionRange.Value.startIndex;
     int appendixCount = appendixSectionRange.Value.endExclusive - appendixSectionRange.Value.startIndex;
-    var appendixBlocks = topLevelBlocks.GetRange(appendixStart, appendixCount);
+    var extractedAppendixBlocks = topLevelBlocks.GetRange(appendixStart, appendixCount);
     topLevelBlocks.RemoveRange(appendixStart, appendixCount);
 
-    var referencesSectionRange = FindTopLevelSectionRange(topLevelBlocks, "References");
-    int insertAppendixAtIndex = referencesSectionRange?.endExclusive ?? topLevelBlocks.Count;
-
-    if (!referencesSectionRange.HasValue)
+    foreach (var topLevelBlock in topLevelBlocks)
     {
-        Console.WriteLine("[WARNING] '# Appendix' found but '# References' heading was not found. Appending appendix at document end.");
+        ProcessMarkdownNode(topLevelBlock);
     }
 
-    bool appendixInserted = false;
-    for (int i = 0; i < topLevelBlocks.Count; i++)
+    return extractedAppendixBlocks;
+}
+
+bool IsHeading1Paragraph(Paragraph paragraph)
+{
+    var styleId = paragraph.ParagraphProperties?.ParagraphStyleId?.Val?.Value;
+    return string.Equals(styleId, "Heading1", StringComparison.OrdinalIgnoreCase);
+}
+
+string GetNormalizedParagraphText(Paragraph paragraph)
+{
+    string paragraphText = string.Concat(paragraph.Descendants<Text>().Select(text => text.Text)).Trim();
+    paragraphText = Regex.Replace(paragraphText, @"\s+\{#[^}]+\}\s*$", string.Empty).Trim();
+    return paragraphText;
+}
+
+bool ParagraphContainsBibliographyField(Paragraph paragraph)
+{
+    bool hasSimpleField = paragraph.Descendants<SimpleField>().Any(simpleField =>
+        simpleField.Instruction?.Value?.IndexOf("BIBLIOGRAPHY", StringComparison.OrdinalIgnoreCase) >= 0);
+
+    if (hasSimpleField)
     {
-        if (!appendixInserted && i == insertAppendixAtIndex)
-        {
-            docxContent.AddPageBreak();
-            foreach (var appendixBlock in appendixBlocks)
-            {
-                ProcessMarkdownNode(appendixBlock);
-            }
-
-            appendixInserted = true;
-        }
-
-        ProcessMarkdownNode(topLevelBlocks[i]);
+        return true;
     }
 
-    if (!appendixInserted)
+    return paragraph.Descendants<FieldCode>().Any(fieldCode =>
+        fieldCode.InnerText.IndexOf("BIBLIOGRAPHY", StringComparison.OrdinalIgnoreCase) >= 0);
+}
+
+OpenXmlElement? GetDirectBodyChild(Body body, OpenXmlElement element)
+{
+    OpenXmlElement? current = element;
+    while (current?.Parent != null && current.Parent != body)
     {
-        docxContent.AddPageBreak();
-        foreach (var appendixBlock in appendixBlocks)
-        {
-            ProcessMarkdownNode(appendixBlock);
-        }
+        current = current.Parent;
     }
+
+    return current?.Parent == body ? current : null;
+}
+
+OpenXmlElement? FindAppendixInsertAnchorAfterReferences(Body body)
+{
+    var bibliographyParagraph = body
+        .Descendants<Paragraph>()
+        .LastOrDefault(ParagraphContainsBibliographyField);
+
+    if (bibliographyParagraph != null)
+    {
+        return GetDirectBodyChild(body, bibliographyParagraph);
+    }
+
+    var referencesHeadingParagraph = body
+        .Descendants<Paragraph>()
+        .LastOrDefault(paragraph =>
+            IsHeading1Paragraph(paragraph) &&
+            string.Equals(GetNormalizedParagraphText(paragraph), "References", StringComparison.OrdinalIgnoreCase));
+
+    return referencesHeadingParagraph == null
+        ? null
+        : GetDirectBodyChild(body, referencesHeadingParagraph);
 }
 
 // Main recursive processor for markdown nodes
@@ -1170,7 +1207,20 @@ void ProcessMarkdownNode(MarkdownObject node)
 
 try
 {
-    ProcessMarkdownDocumentWithAppendixRelocation(markdownContent);
+    appendixBlocks = ProcessMarkdownDocumentAndExtractAppendix(markdownContent);
+
+    if (appendixBlocks.Count > 0)
+    {
+        docxContent = appendixDocxContent;
+        docxContent.AddPageBreak();
+        foreach (var appendixBlock in appendixBlocks)
+        {
+            ProcessMarkdownNode(appendixBlock);
+        }
+
+        docxContent = mainDocxContent;
+    }
+
     ValidateCrossReferencesOrThrow();
 }
 catch (InvalidOperationException ex)
@@ -1216,6 +1266,18 @@ if (firstSectionEndPara is null)
 // var newPara = new Paragraph(new Run(new Text("Hello, World!")));
 // body.InsertAfter(newPara, firstSectionEndPara);
 
-docxContent.WriteTo(doc, firstSectionEndPara);
+mainDocxContent.WriteTo(doc, firstSectionEndPara);
+
+if (appendixBlocks.Count > 0)
+{
+    var appendixInsertAnchor = FindAppendixInsertAnchorAfterReferences(body);
+    if (appendixInsertAnchor == null)
+    {
+        Console.WriteLine("[WARNING] Could not find the references anchor in the document. Appending appendix at the end of the body.");
+        appendixInsertAnchor = body.LastChild ?? firstSectionEndPara;
+    }
+
+    appendixDocxContent.WriteTo(doc, appendixInsertAnchor);
+}
 
 doc.Save();
