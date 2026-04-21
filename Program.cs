@@ -828,6 +828,95 @@ void ProcessTable(Markdig.Extensions.Tables.Table table, string? caption = null,
     }
 }
 
+string GetNormalizedTopLevelHeadingText(HeadingBlock headingBlock)
+{
+    string headingText = GetPlainText(headingBlock.Inline).Trim();
+    headingText = Regex.Replace(headingText, @"\s+\{#[^}]+\}\s*$", string.Empty).Trim();
+    return headingText;
+}
+
+(int startIndex, int endExclusive)? FindTopLevelSectionRange(IReadOnlyList<Block> topLevelBlocks, string headingText)
+{
+    for (int i = 0; i < topLevelBlocks.Count; i++)
+    {
+        if (topLevelBlocks[i] is not HeadingBlock headingBlock || headingBlock.Level != 1)
+        {
+            continue;
+        }
+
+        if (!string.Equals(GetNormalizedTopLevelHeadingText(headingBlock), headingText, StringComparison.OrdinalIgnoreCase))
+        {
+            continue;
+        }
+
+        int sectionEndExclusive = i + 1;
+        while (sectionEndExclusive < topLevelBlocks.Count)
+        {
+            if (topLevelBlocks[sectionEndExclusive] is HeadingBlock nextHeadingBlock && nextHeadingBlock.Level == 1)
+            {
+                break;
+            }
+
+            sectionEndExclusive++;
+        }
+
+        return (i, sectionEndExclusive);
+    }
+
+    return null;
+}
+
+void ProcessMarkdownDocumentWithAppendixRelocation(MarkdownDocument document)
+{
+    var topLevelBlocks = document.Cast<Block>().ToList();
+    var appendixSectionRange = FindTopLevelSectionRange(topLevelBlocks, "Appendix");
+
+    if (!appendixSectionRange.HasValue)
+    {
+        ProcessMarkdownNode(document);
+        return;
+    }
+
+    int appendixStart = appendixSectionRange.Value.startIndex;
+    int appendixCount = appendixSectionRange.Value.endExclusive - appendixSectionRange.Value.startIndex;
+    var appendixBlocks = topLevelBlocks.GetRange(appendixStart, appendixCount);
+    topLevelBlocks.RemoveRange(appendixStart, appendixCount);
+
+    var referencesSectionRange = FindTopLevelSectionRange(topLevelBlocks, "References");
+    int insertAppendixAtIndex = referencesSectionRange?.endExclusive ?? topLevelBlocks.Count;
+
+    if (!referencesSectionRange.HasValue)
+    {
+        Console.WriteLine("[WARNING] '# Appendix' found but '# References' heading was not found. Appending appendix at document end.");
+    }
+
+    bool appendixInserted = false;
+    for (int i = 0; i < topLevelBlocks.Count; i++)
+    {
+        if (!appendixInserted && i == insertAppendixAtIndex)
+        {
+            docxContent.AddPageBreak();
+            foreach (var appendixBlock in appendixBlocks)
+            {
+                ProcessMarkdownNode(appendixBlock);
+            }
+
+            appendixInserted = true;
+        }
+
+        ProcessMarkdownNode(topLevelBlocks[i]);
+    }
+
+    if (!appendixInserted)
+    {
+        docxContent.AddPageBreak();
+        foreach (var appendixBlock in appendixBlocks)
+        {
+            ProcessMarkdownNode(appendixBlock);
+        }
+    }
+}
+
 // Main recursive processor for markdown nodes
 void ProcessMarkdownNode(MarkdownObject node)
 {
@@ -1081,7 +1170,7 @@ void ProcessMarkdownNode(MarkdownObject node)
 
 try
 {
-    ProcessMarkdownNode(markdownContent);
+    ProcessMarkdownDocumentWithAppendixRelocation(markdownContent);
     ValidateCrossReferencesOrThrow();
 }
 catch (InvalidOperationException ex)
