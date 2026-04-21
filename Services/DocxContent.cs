@@ -12,6 +12,8 @@ namespace md_to_docx_sync.Services;
 
 public class DocxContent : IDocxContent
 {
+    private const string StyleNameMarkerPrefix = "__STYLE_NAME__:";
+
     // State tracking
     private int _currentHeadingLevel = 1;
     private DocxListType? _currentListType = null;
@@ -94,6 +96,29 @@ public class DocxContent : IDocxContent
                 new ParagraphStyleId() { Val = styleId }
             )
         );
+        _elements.Add(_currentParagraph);
+    }
+
+    public void NewParagraphWithStyleName(string styleName, string? bookmarkName = null)
+    {
+        if (string.IsNullOrWhiteSpace(styleName))
+        {
+            throw new ArgumentException("Style name cannot be empty.", nameof(styleName));
+        }
+
+        FinalizeCurrentContext();
+
+        _currentParagraph = new Paragraph(
+            new ParagraphProperties(
+                new ParagraphStyleId() { Val = $"{StyleNameMarkerPrefix}{styleName}" }
+            )
+        );
+
+        if (!string.IsNullOrEmpty(bookmarkName))
+        {
+            AddBookmarkToParagraph(_currentParagraph, bookmarkName);
+        }
+
         _elements.Add(_currentParagraph);
     }
 
@@ -687,6 +712,7 @@ public class DocxContent : IDocxContent
             if (clonedElement is Paragraph paragraph)
             {
                 RemapNumberingId(paragraph, idOffset);
+                ResolveParagraphStyleByNameMarker(paragraph, mainPart);
 
                 // Check for image placeholder marker
                 var textRun = paragraph.Descendants<Text>().FirstOrDefault();
@@ -713,6 +739,59 @@ public class DocxContent : IDocxContent
             body.InsertAfter(clonedElement, previousElement);
             previousElement = previousElement.NextSibling() ?? previousElement;
         }
+    }
+
+    private static void ResolveParagraphStyleByNameMarker(Paragraph paragraph, MainDocumentPart mainPart)
+    {
+        var paragraphStyleId = paragraph.ParagraphProperties?.ParagraphStyleId;
+        string? styleToken = paragraphStyleId?.Val?.Value;
+        if (string.IsNullOrWhiteSpace(styleToken) || !styleToken.StartsWith(StyleNameMarkerPrefix, StringComparison.Ordinal))
+        {
+            return;
+        }
+
+        string requestedStyleName = styleToken.Substring(StyleNameMarkerPrefix.Length);
+        if (string.IsNullOrWhiteSpace(requestedStyleName))
+        {
+            return;
+        }
+
+        string? resolvedStyleId = ResolveStyleIdFromTemplate(mainPart, requestedStyleName);
+        if (!string.IsNullOrWhiteSpace(resolvedStyleId))
+        {
+            paragraphStyleId!.Val = resolvedStyleId;
+            return;
+        }
+
+        // Fallback to the requested token as style ID in case the template uses it directly.
+        paragraphStyleId!.Val = requestedStyleName;
+        Console.WriteLine($"[WARNING] Could not resolve style name '{requestedStyleName}' in template styles. Falling back to style ID '{requestedStyleName}'.");
+    }
+
+    private static string? ResolveStyleIdFromTemplate(MainDocumentPart mainPart, string requestedStyleName)
+    {
+        var styles = mainPart.StyleDefinitionsPart?.Styles;
+        if (styles == null)
+        {
+            return null;
+        }
+
+        foreach (var style in styles.Elements<Style>())
+        {
+            string? styleId = style.StyleId?.Value;
+            if (!string.IsNullOrWhiteSpace(styleId) && string.Equals(styleId, requestedStyleName, StringComparison.OrdinalIgnoreCase))
+            {
+                return styleId;
+            }
+
+            string? styleName = style.GetFirstChild<StyleName>()?.Val?.Value;
+            if (!string.IsNullOrWhiteSpace(styleName) && string.Equals(styleName, requestedStyleName, StringComparison.OrdinalIgnoreCase))
+            {
+                return styleId;
+            }
+        }
+
+        return null;
     }
 
     private void ResolveExternalHyperlinks(OpenXmlElement element, MainDocumentPart mainPart, Dictionary<string, string> relationshipIdByTarget)

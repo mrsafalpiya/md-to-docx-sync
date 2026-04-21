@@ -58,6 +58,7 @@ var markdownContent = Markdown.Parse(rawMarkdown, pipeline);
 // Create DocxContent from markdown
 DocxContent docxContent = new();
 DocxContent mainDocxContent = docxContent;
+DocxContent frontMatterDocxContent = new();
 DocxContent appendixDocxContent = new();
 List<Block> appendixBlocks = new();
 
@@ -870,28 +871,98 @@ string GetNormalizedTopLevelHeadingText(HeadingBlock headingBlock)
     return null;
 }
 
-List<Block> ProcessMarkdownDocumentAndExtractAppendix(MarkdownDocument document)
+List<Block> ExtractTopLevelSection(List<Block> topLevelBlocks, string headingText)
 {
-    var topLevelBlocks = document.Cast<Block>().ToList();
-    var appendixSectionRange = FindTopLevelSectionRange(topLevelBlocks, "Appendix");
+    var sectionRange = FindTopLevelSectionRange(topLevelBlocks, headingText);
 
-    if (!appendixSectionRange.HasValue)
+    if (!sectionRange.HasValue)
     {
-        ProcessMarkdownNode(document);
         return new List<Block>();
     }
 
-    int appendixStart = appendixSectionRange.Value.startIndex;
-    int appendixCount = appendixSectionRange.Value.endExclusive - appendixSectionRange.Value.startIndex;
-    var extractedAppendixBlocks = topLevelBlocks.GetRange(appendixStart, appendixCount);
-    topLevelBlocks.RemoveRange(appendixStart, appendixCount);
+    int sectionStart = sectionRange.Value.startIndex;
+    int sectionCount = sectionRange.Value.endExclusive - sectionRange.Value.startIndex;
+    var extractedSectionBlocks = topLevelBlocks.GetRange(sectionStart, sectionCount);
+    topLevelBlocks.RemoveRange(sectionStart, sectionCount);
 
-    foreach (var topLevelBlock in topLevelBlocks)
+    return extractedSectionBlocks;
+}
+
+(List<Block> remainingBlocks, List<Block> acknowledgementsBlocks, List<Block> abstractBlocks, List<Block> appendixBlocks) SplitTopLevelDocumentSections(MarkdownDocument document)
+{
+    var topLevelBlocks = document.Cast<Block>().ToList();
+    var acknowledgementsBlocks = ExtractTopLevelSection(topLevelBlocks, "Acknowledgements");
+    var abstractBlocks = ExtractTopLevelSection(topLevelBlocks, "Abstract");
+    var appendixBlocks = ExtractTopLevelSection(topLevelBlocks, "Appendix");
+
+    return (topLevelBlocks, acknowledgementsBlocks, abstractBlocks, appendixBlocks);
+}
+
+void ProcessTopLevelBlocks(IEnumerable<Block> blocks)
+{
+    foreach (var topLevelBlock in blocks)
     {
         ProcessMarkdownNode(topLevelBlock);
     }
+}
 
-    return extractedAppendixBlocks;
+const string frontMatterHeadingStyleName = "Heading (Non-Numbered)";
+const string frontMatterParagraphStyleName = "Normal";
+
+void ProcessFrontMatterSectionBlocks(List<Block> sectionBlocks, string sectionLabel)
+{
+    bool renderedSectionHeading = false;
+
+    foreach (var block in sectionBlocks)
+    {
+        if (!renderedSectionHeading && block is HeadingBlock headingBlock && headingBlock.Level == 1)
+        {
+            string location = $"{sectionLabel} heading";
+            string? headingTargetId = GetTargetIdFromAttributes(headingBlock)
+                ?? ConsumeTrailingTargetMarkerFromInline(headingBlock.Inline, location);
+
+            if (!string.IsNullOrEmpty(headingTargetId))
+            {
+                RegisterCrossReferenceTarget(headingTargetId, location);
+            }
+
+            docxContent.NewParagraphWithStyleName(frontMatterHeadingStyleName, headingTargetId);
+            ProcessInlinesWithUnderline(headingBlock.Inline);
+            renderedSectionHeading = true;
+            continue;
+        }
+
+        if (block is ParagraphBlock paragraphBlock)
+        {
+            docxContent.NewParagraphWithStyleName(frontMatterParagraphStyleName);
+            ProcessInlinesWithUnderline(paragraphBlock.Inline);
+            continue;
+        }
+
+        ProcessMarkdownNode(block);
+    }
+}
+
+void ProcessFrontMatterSections(List<Block> acknowledgementsBlocks, List<Block> abstractBlocks)
+{
+    bool hasRenderedFrontMatterSection = false;
+
+    if (acknowledgementsBlocks.Count > 0)
+    {
+        ProcessFrontMatterSectionBlocks(acknowledgementsBlocks, "Acknowledgements");
+        hasRenderedFrontMatterSection = true;
+    }
+
+    if (abstractBlocks.Count > 0)
+    {
+        if (hasRenderedFrontMatterSection)
+        {
+            docxContent.AddPageBreak();
+        }
+
+        ProcessFrontMatterSectionBlocks(abstractBlocks, "Abstract");
+        hasRenderedFrontMatterSection = true;
+    }
 }
 
 bool IsHeading1Paragraph(Paragraph paragraph)
@@ -1207,7 +1278,18 @@ void ProcessMarkdownNode(MarkdownObject node)
 
 try
 {
-    appendixBlocks = ProcessMarkdownDocumentAndExtractAppendix(markdownContent);
+    var splitSections = SplitTopLevelDocumentSections(markdownContent);
+
+    if (splitSections.acknowledgementsBlocks.Count > 0 || splitSections.abstractBlocks.Count > 0)
+    {
+        docxContent = frontMatterDocxContent;
+        ProcessFrontMatterSections(splitSections.acknowledgementsBlocks, splitSections.abstractBlocks);
+        docxContent = mainDocxContent;
+    }
+
+    ProcessTopLevelBlocks(splitSections.remainingBlocks);
+
+    appendixBlocks = splitSections.appendixBlocks;
 
     if (appendixBlocks.Count > 0)
     {
@@ -1254,19 +1336,31 @@ if (body is null)
     return;
 }
 
-var firstSectionEndPara = body
-            .Descendants<Paragraph>()
-            .FirstOrDefault(p => p.Descendants<SectionProperties>().Any());
-if (firstSectionEndPara is null)
+var sectionBreakParagraphs = body
+    .Elements<Paragraph>()
+    .Where(paragraph => paragraph.Descendants<SectionProperties>().Any())
+    .ToList();
+
+if (sectionBreakParagraphs.Count < 2)
 {
-    Console.Error.WriteLine("[ERROR] The DOCX template does not contain a second section break.");
+    Console.Error.WriteLine("[ERROR] The DOCX template must contain at least two section breaks (cover -> front matter and front matter -> main content).");
     return;
 }
+
+var firstSectionEndPara = sectionBreakParagraphs[0];
+var secondSectionEndPara = sectionBreakParagraphs[1];
 
 // var newPara = new Paragraph(new Run(new Text("Hello, World!")));
 // body.InsertAfter(newPara, firstSectionEndPara);
 
-mainDocxContent.WriteTo(doc, firstSectionEndPara);
+if (frontMatterDocxContent.Elements.Count > 0)
+{
+    // Insert front matter at the beginning of section 2 (after the cover section break).
+    frontMatterDocxContent.WriteTo(doc, firstSectionEndPara);
+}
+
+// Insert main content at the beginning of section 3 (after the front-matter section break).
+mainDocxContent.WriteTo(doc, secondSectionEndPara);
 
 if (appendixBlocks.Count > 0)
 {
@@ -1274,7 +1368,7 @@ if (appendixBlocks.Count > 0)
     if (appendixInsertAnchor == null)
     {
         Console.WriteLine("[WARNING] Could not find the references anchor in the document. Appending appendix at the end of the body.");
-        appendixInsertAnchor = body.LastChild ?? firstSectionEndPara;
+        appendixInsertAnchor = body.LastChild ?? secondSectionEndPara;
     }
 
     appendixDocxContent.WriteTo(doc, appendixInsertAnchor);
